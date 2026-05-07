@@ -1,0 +1,11 @@
+[package]
+name = "qs_crypto"
+version = "0.1.0"
+edition = "2021"
+description = "Cryptographic library derived from spin glass quantum simulation"
+readme = "README.md"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+thiserror = "2"
+zeroize = { version = "1", features = ["derive"] }
