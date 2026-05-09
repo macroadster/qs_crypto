@@ -153,6 +153,39 @@ impl SpinSponge {
         output
     }
 
+    /// Squeeze `num_bytes` of output using standard sponge extraction.
+    ///
+    /// Reads the rate portion directly as LE-encoded u16 bytes, with a
+    /// permutation between every rate-sized block.  This matches the
+    /// formal sponge indifferentiability proof (Bertoni et al.) and
+    /// should be used by key derivation and hash primitives where
+    /// provability takes priority over output uniformity.
+    pub fn squeeze_raw(&mut self, num_bytes: usize) -> Vec<u8> {
+        let mut output = Vec::with_capacity(num_bytes);
+
+        while output.len() < num_bytes {
+            let spins = self.lattice.spins();
+            for i in 0..self.rate {
+                if output.len() >= num_bytes {
+                    break;
+                }
+                let le = spins[i].to_le_bytes();
+                for &b in &le {
+                    if output.len() >= num_bytes {
+                        break;
+                    }
+                    output.push(b);
+                }
+            }
+            if output.len() < num_bytes {
+                self.permute();
+            }
+        }
+
+        output.truncate(num_bytes);
+        output
+    }
+
     /// Reset the sponge to its initial (all-zero) state.
     pub fn reset(&mut self) {
         let spins = vec![0u16; self.lattice.spins().len()];

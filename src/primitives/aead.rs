@@ -27,6 +27,7 @@ use chacha20poly1305::{ChaCha20Poly1305, KeyInit, Nonce};
 use sha3::digest::{ExtendableOutput, Update};
 use sha3::Shake256;
 use std::io::Read;
+use subtle::ConstantTimeEq;
 use zeroize::Zeroize;
 
 use crate::core::sponge::SpinSponge;
@@ -47,8 +48,9 @@ pub struct AeadCiphertext {
 fn derive_spin_subkey(key: &[u8; 32], nonce: &[u8; 16], aad: &[u8]) -> [u8; 32] {
     let mut sponge = SpinSponge::new(&Params::default());
 
-    let mut key_input = Vec::with_capacity(1 + 32 + 16);
-    key_input.push(0x04); // domain separator: AEAD
+    let mut key_input = Vec::with_capacity(3 + 32 + 16);
+    // Versioned domain separator: [version=1, AEAD=0x04, QS-256=0x03]
+    key_input.extend_from_slice(&[0x01, 0x04, 0x03]);
     key_input.extend_from_slice(key);
     key_input.extend_from_slice(nonce);
     sponge.absorb(&key_input);
@@ -60,7 +62,7 @@ fn derive_spin_subkey(key: &[u8; 32], nonce: &[u8; 16], aad: &[u8]) -> [u8; 32] 
 
     sponge.permute();
 
-    let out = sponge.squeeze(32);
+    let out = sponge.squeeze_raw(32);
     sponge.zeroize();
     let mut subkey = [0u8; 32];
     subkey.copy_from_slice(&out);
@@ -70,7 +72,8 @@ fn derive_spin_subkey(key: &[u8; 32], nonce: &[u8; 16], aad: &[u8]) -> [u8; 32] 
 /// Derive the SHAKE256 subkey contribution from (key, nonce).
 fn derive_shake_subkey(key: &[u8; 32], nonce: &[u8; 16]) -> [u8; 32] {
     let mut hasher = Shake256::default();
-    hasher.update(&[0x04]); // same domain separator
+    // Versioned domain separator: [version=1, AEAD=0x04, QS-256=0x03]
+    hasher.update(&[0x01, 0x04, 0x03]);
     hasher.update(key);
     hasher.update(nonce);
     let mut reader = hasher.finalize_xof();
@@ -171,4 +174,122 @@ pub fn decrypt(
     cipher
         .decrypt(chacha_nonce, payload)
         .map_err(|_| Error::AuthenticationFailed)
+}
+
+// ── SIV (Synthetic-IV) mode ────────────────────────────────────────
+
+/// Ciphertext produced by [`encrypt_siv`], containing the synthetic IV,
+/// encrypted body, and a 128-bit Poly1305 authentication tag.
+///
+/// Nonce reuse degrades to deterministic encryption (leaks equality
+/// only) rather than XOR-of-plaintexts.
+#[derive(Debug, Clone)]
+pub struct SivCiphertext {
+    /// 96-bit synthetic IV derived from `(key, aad, plaintext)`.
+    pub siv: [u8; 12],
+    /// Encrypted payload.
+    pub ciphertext: Vec<u8>,
+    /// 128-bit authentication tag (Poly1305).
+    pub tag: [u8; 16],
+}
+
+/// Derive the 12-byte synthetic IV from `(combined_key, aad, plaintext)`.
+///
+/// The IV is plaintext-dependent, so reusing (key, nonce) with a
+/// different plaintext still yields a unique ChaCha20 nonce.
+fn derive_synthetic_nonce(combined_key: &[u8; 32], aad: &[u8], plaintext: &[u8]) -> [u8; 12] {
+    let mut hasher = Shake256::default();
+    hasher.update(b"qs-aead-siv");
+    hasher.update(combined_key);
+    hasher.update(&(aad.len() as u64).to_le_bytes());
+    hasher.update(aad);
+    hasher.update(plaintext);
+    let mut reader = hasher.finalize_xof();
+    let mut nonce = [0u8; 12];
+    reader.read_exact(&mut nonce).expect("SHAKE256 read must not fail");
+    nonce
+}
+
+/// Encrypt with SIV (Synthetic-IV) nonce-misuse resistance.
+///
+/// Same hybrid key derivation as [`encrypt`], but the ChaCha20-Poly1305
+/// nonce is derived from `SHAKE256(combined_key ‖ aad ‖ plaintext)`
+/// instead of from the external nonce alone.  If `(key, nonce)` is
+/// reused, different plaintexts still get distinct ChaCha nonces —
+/// the worst case is deterministic encryption (leaks equality only).
+pub fn encrypt_siv(
+    key: &[u8; 32],
+    nonce: &[u8; 16],
+    aad: &[u8],
+    plaintext: &[u8],
+) -> SivCiphertext {
+    let mut spin_sub = derive_spin_subkey(key, nonce, aad);
+    let mut shake_sub = derive_shake_subkey(key, nonce);
+    let mut combined = combine_keys(&spin_sub, &shake_sub);
+
+    spin_sub.zeroize();
+    shake_sub.zeroize();
+
+    let siv = derive_synthetic_nonce(&combined, aad, plaintext);
+
+    let cipher = ChaCha20Poly1305::new((&combined).into());
+    combined.zeroize();
+
+    let chacha_nonce = Nonce::from_slice(&siv);
+    let payload = chacha20poly1305::aead::Payload { msg: plaintext, aad };
+    let ct_with_tag = cipher
+        .encrypt(chacha_nonce, payload)
+        .expect("ChaCha20-Poly1305 encryption must not fail");
+
+    let tag_start = ct_with_tag.len() - 16;
+    let ciphertext = ct_with_tag[..tag_start].to_vec();
+    let mut tag = [0u8; 16];
+    tag.copy_from_slice(&ct_with_tag[tag_start..]);
+
+    SivCiphertext { siv, ciphertext, tag }
+}
+
+/// Decrypt a SIV-mode ciphertext.  Returns `Error::AuthenticationFailed`
+/// if the Poly1305 tag or the SIV binding check fails.
+pub fn decrypt_siv(
+    key: &[u8; 32],
+    nonce: &[u8; 16],
+    aad: &[u8],
+    siv: &[u8; 12],
+    ciphertext: &[u8],
+    tag: &[u8; 16],
+) -> Result<Vec<u8>, Error> {
+    let mut spin_sub = derive_spin_subkey(key, nonce, aad);
+    let mut shake_sub = derive_shake_subkey(key, nonce);
+    let mut combined = combine_keys(&spin_sub, &shake_sub);
+
+    spin_sub.zeroize();
+    shake_sub.zeroize();
+
+    let cipher = ChaCha20Poly1305::new((&combined).into());
+
+    let chacha_nonce = Nonce::from_slice(siv);
+
+    let mut ct_with_tag = Vec::with_capacity(ciphertext.len() + 16);
+    ct_with_tag.extend_from_slice(ciphertext);
+    ct_with_tag.extend_from_slice(tag);
+
+    let payload = chacha20poly1305::aead::Payload {
+        msg: &ct_with_tag,
+        aad,
+    };
+
+    let plaintext = cipher
+        .decrypt(chacha_nonce, payload)
+        .map_err(|_| Error::AuthenticationFailed)?;
+
+    // SIV binding: re-derive the synthetic nonce and verify it matches
+    let expected_siv = derive_synthetic_nonce(&combined, aad, &plaintext);
+    combined.zeroize();
+
+    if expected_siv.ct_eq(siv).unwrap_u8() != 1 {
+        return Err(Error::AuthenticationFailed);
+    }
+
+    Ok(plaintext)
 }

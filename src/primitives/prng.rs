@@ -22,8 +22,9 @@ impl SpinPrng {
     /// Seed a PRNG using explicit parameters.
     pub fn with_params(seed: &[u8], params: &Params) -> Self {
         let mut sponge = SpinSponge::new(params);
-        let mut input = Vec::with_capacity(1 + seed.len());
-        input.push(0x02); // domain separator
+        let mut input = Vec::with_capacity(3 + seed.len());
+        // Versioned domain separator: [version=1, PRNG=0x02, QS-256=0x03]
+        input.extend_from_slice(&[0x01, 0x02, 0x03]);
         input.extend_from_slice(seed);
         sponge.absorb(&input);
         Self { sponge }

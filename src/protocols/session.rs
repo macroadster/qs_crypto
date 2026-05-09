@@ -50,8 +50,9 @@ fn read_len_prefixed(buf: &[u8], offset: &mut usize) -> Result<Vec<u8>, Error> {
     Ok(data)
 }
 
-/// Wire format: `[direction(1) | msg_number(8) | ciphertext(var) | tag(16)]`
+/// Wire format: `[direction(1) | msg_number(8) | siv(12) | ciphertext(var) | tag(16)]`
 const HEADER_LEN: usize = 1 + 8; // direction + msg_number
+const SIV_LEN: usize = 12;
 const TAG_LEN: usize = 16;
 
 /// An encrypted session between two parties.
@@ -103,10 +104,11 @@ impl Session {
         header.push(direction);
         header.extend_from_slice(&msg_number.to_le_bytes());
 
-        let ct = aead::encrypt(&msg_key, &nonce, &header, plaintext);
+        let ct = aead::encrypt_siv(&msg_key, &nonce, &header, plaintext);
 
-        // Wire format: header ‖ ciphertext ‖ tag
+        // Wire format: header ‖ siv ‖ ciphertext ‖ tag
         let mut message = header;
+        message.extend_from_slice(&ct.siv);
         message.extend_from_slice(&ct.ciphertext);
         message.extend_from_slice(&ct.tag);
         message
@@ -114,7 +116,7 @@ impl Session {
 
     /// Decrypt an incoming message and advance the receiving ratchet.
     pub fn decrypt(&mut self, message: &[u8]) -> crate::Result<Vec<u8>> {
-        if message.len() < HEADER_LEN + TAG_LEN {
+        if message.len() < HEADER_LEN + SIV_LEN + TAG_LEN {
             return Err(Error::AuthenticationFailed);
         }
 
@@ -122,7 +124,11 @@ impl Session {
         let direction = header[0];
         let msg_number = u64::from_le_bytes(header[1..9].try_into().unwrap());
 
-        let body = &message[HEADER_LEN..];
+        let siv: [u8; 12] = message[HEADER_LEN..HEADER_LEN + SIV_LEN]
+            .try_into()
+            .unwrap();
+
+        let body = &message[HEADER_LEN + SIV_LEN..];
         let ct_len = body.len() - TAG_LEN;
         let ciphertext = &body[..ct_len];
         let tag: [u8; 16] = body[ct_len..].try_into().unwrap();
@@ -131,7 +137,7 @@ impl Session {
 
         let nonce = derive_nonce(direction, msg_number);
 
-        aead::decrypt(&msg_key, &nonce, header, ciphertext, &tag)
+        aead::decrypt_siv(&msg_key, &nonce, header, &siv, ciphertext, &tag)
     }
 
     /// Serialize session state for persistence.

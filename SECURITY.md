@@ -31,7 +31,7 @@ This is the single most important change that makes the asymmetric layer "real."
 - No secret-dependent branches in the decapsulation rejection path (masking via `unwrap_u8().wrapping_neg()`).
 
 ### 3. Domain Separation
-- Every use of the sponge (hash, KDF, AEAD, PRNG, KEM SS derivation) uses a distinct domain byte (`0x01`–`0x04`, `0x10`–`0x12`).
+- Every use of the sponge (hash, KDF, AEAD, PRNG, KEM SS derivation) uses a distinct **versioned domain separator**: `[version_byte, primitive_id, security_level_byte]`. For the current version: `[0x01, id, 0x03]` where `id` ∈ {0x01=Hash, 0x02=PRNG, 0x03=KDF, 0x04=AEAD}. This encoding prevents collisions from future parameter changes.
 - The KEM shared secret derivation still uses `spin_hash` (user-visible output); the confidentiality of the encapsulated message is protected by the RLWE+SHAKE reduction.
 
 ---
@@ -45,8 +45,11 @@ The `SpinLattice::step()` function (linear neighbor mixing + position-dependent 
 - The design document requires **NIST SP 800-22** and **TestU01 BigCrush** statistical validation before any trust. As of this version, only basic avalanche and determinism tests exist.
 - **Recommendation:** Treat `spin_*` functions as an interesting experimental symmetric primitive family. For high-value data, prefer a hybrid construction or layer a vetted AEAD (e.g., AES-GCM or ChaCha20-Poly1305 via another crate) on top of a Spin-derived key.
 
-### AEAD Nonce-Misuse Sensitivity
-The `aead::encrypt` / `aead::decrypt` functions now use ChaCha20-Poly1305 internally. This construction is still **not nonce-misuse resistant**: reusing the same `(key, nonce)` pair for two different plaintexts remains dangerous. The `Session` layer prevents this by deriving unique nonces from SHAKE256(direction, msg_number) via the ratchet counter. Direct callers of `aead::encrypt` must guarantee nonce uniqueness themselves. A future SIV mode would provide defense-in-depth.
+### AEAD Nonce-Misuse Resistance (SIV Mode)
+The `aead::encrypt_siv` / `aead::decrypt_siv` functions provide **nonce-misuse resistant** encryption via a Synthetic-IV construction: the ChaCha20-Poly1305 nonce is derived from `SHAKE256(combined_key ‖ aad_len ‖ aad ‖ plaintext)`, so reusing the same `(key, nonce)` pair with different plaintexts yields distinct ChaCha nonces — the worst case is deterministic encryption (leaks equality only), not XOR-of-plaintexts. The `Session` layer uses `encrypt_siv`/`decrypt_siv` by default. The original `aead::encrypt`/`aead::decrypt` (non-SIV) remain available for callers who guarantee nonce uniqueness and prefer slightly lower overhead (no SIV binding check).
+
+### Authentication Tag Rationale (128-bit Poly1305)
+The 128-bit Poly1305 tag produced by ChaCha20-Poly1305 is sufficient for this construction. The hybrid key derivation (SpinSponge ⊕ SHAKE256) already provides a safety net: even if the SpinSponge has subtle biases, the SHAKE256 path independently produces a strong combined key. Under a good key, Poly1305's 128-bit tag is proven secure, and appending a second HMAC-SHA256 tag would add 32 bytes of overhead per message for a negligible marginal benefit. This decision may be revisited if future cryptanalysis reveals weaknesses that affect the combined key quality despite the hybrid derivation.
 
 ### Parameter Choices
 - `q = 3329`, CBD(η=2), lattice dimensions (144/196/256) are taken from Kyber-512/768/1024 analogs.
@@ -138,4 +141,4 @@ We welcome third-party cryptanalysis of the `SpinLattice` round function.
 
 ---
 
-**Last updated:** 2026 — after the symmetric layer hardening pass (hybrid AEAD, vetted KDFs, SHAKE256 nonces).
+**Last updated:** 2026 — after Tier 2 sponge hardening (standard squeeze, SIV mode, versioned domain separators).

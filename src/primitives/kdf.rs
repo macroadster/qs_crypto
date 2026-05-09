@@ -30,12 +30,13 @@ pub fn spin_kdf(key: &[u8], salt: &[u8], info: &[u8], length: usize) -> Vec<u8> 
 
     // ── EXTRACT ────────────────────────────────────────────────
     let mut extract = SpinSponge::new(&params);
-    let mut extract_input = Vec::with_capacity(1 + salt.len() + key.len());
-    extract_input.push(0x03); // domain separator
+    let mut extract_input = Vec::with_capacity(3 + salt.len() + key.len());
+    // Versioned domain separator: [version=1, KDF=0x03, QS-256=0x03]
+    extract_input.extend_from_slice(&[0x01, 0x03, 0x03]);
     extract_input.extend_from_slice(salt);
     extract_input.extend_from_slice(key);
     extract.absorb(&extract_input);
-    let prk = extract.squeeze(32);
+    let prk = extract.squeeze_raw(32);
 
     // ── EXPAND ─────────────────────────────────────────────────
     // Each block uses a fresh sponge keyed by PRK (HKDF-Expand style):
@@ -53,7 +54,7 @@ pub fn spin_kdf(key: &[u8], salt: &[u8], info: &[u8], length: usize) -> Vec<u8> 
         expand_input.push(counter);
         expand.absorb(&expand_input);
 
-        let block = expand.squeeze(32);
+        let block = expand.squeeze_raw(32);
         output.extend_from_slice(&block);
         prev_block = block;
         counter = counter.wrapping_add(1);

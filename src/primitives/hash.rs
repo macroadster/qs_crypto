@@ -18,8 +18,9 @@ use crate::params::Params;
 pub fn spin_hash(data: &[u8]) -> [u8; 32] {
     let mut sponge = SpinSponge::new(&Params::default());
 
-    let mut input = Vec::with_capacity(1 + data.len());
-    input.push(0x01); // domain separator
+    let mut input = Vec::with_capacity(3 + data.len());
+    // Versioned domain separator: [version=1, Hash=0x01, QS-256=0x03]
+    input.extend_from_slice(&[0x01, 0x01, 0x03]);
     input.extend_from_slice(data);
     sponge.absorb(&input);
 
