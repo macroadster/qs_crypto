@@ -7,6 +7,7 @@
 //! and does *not* depend on the correctness or strength of the novel
 //! SpinSponge / SpinPrng construction.
 
+use crate::core::reduce::barrett_reduce_unsigned;
 use core::hint::black_box;
 use sha3::digest::{ExtendableOutput, Update};
 use sha3::Shake256;
@@ -45,12 +46,13 @@ impl ShakePrng {
 /// hardened KEM path.
 pub fn expand_a_shake(seed: &[u8; 32], params: &Params) -> Poly {
     let n = params.total_spins;
-    let q = params.q;
     let mut xof = ShakePrng::new(seed);
     let raw = xof.next_bytes(n * 2);
     let mut coeffs = Vec::with_capacity(n);
     for chunk in raw.chunks(2) {
-        coeffs.push(u16::from_le_bytes([chunk[0], chunk[1]]) % q);
+        coeffs.push(barrett_reduce_unsigned(
+            u16::from_le_bytes([chunk[0], chunk[1]]) as u64,
+        ));
     }
     Poly { coeffs, n }
 }
@@ -58,7 +60,6 @@ pub fn expand_a_shake(seed: &[u8; 32], params: &Params) -> Poly {
 /// Sample a polynomial from the Centered Binomial Distribution CBD(η)
 /// using a SHAKE256 XOF.  Domain-separated by the provided label.
 pub fn sample_cbd_shake(label: &[u8], eta: u8, n: usize) -> Poly {
-    let q = crate::params::FIELD_MODULUS as u32;
     let bits_per_sample = 2 * eta as usize;
     let bytes_needed = (bits_per_sample * n).div_ceil(8);
 
@@ -87,7 +88,9 @@ pub fn sample_cbd_shake(label: &[u8], eta: u8, n: usize) -> Poly {
             }
             bit_pos += 1;
         }
-        coeffs.push(black_box(((a + q - b) % q) as u16));
+        coeffs.push(black_box(barrett_reduce_unsigned(
+            (a + crate::params::FIELD_MODULUS as u32 - b) as u64,
+        )));
     }
     Poly { coeffs, n }
 }

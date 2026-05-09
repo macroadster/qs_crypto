@@ -4,6 +4,7 @@
 //! uses NTT-based O(N log N) multiplication; other sizes fall back to
 //! schoolbook O(N²).
 
+use crate::core::reduce::{barrett_reduce_signed, barrett_reduce_unsigned};
 use crate::params::{Params, SecurityLevel, FIELD_MODULUS};
 use crate::primitives::hash::spin_hash;
 use crate::primitives::prng::SpinPrng;
@@ -51,12 +52,10 @@ impl Poly {
             data.len(),
             n * 2
         );
-        let q = FIELD_MODULUS;
         let mut coeffs = Vec::with_capacity(n);
         for chunk in data[..n * 2].chunks(2) {
             let c = u16::from_le_bytes([chunk[0], chunk[1]]);
-            // Reduce coefficients into [0, q) to prevent arithmetic issues
-            coeffs.push(c % q);
+            coeffs.push(barrett_reduce_unsigned(c as u64));
         }
         Self { coeffs, n }
     }
@@ -64,26 +63,26 @@ impl Poly {
 
 /// `c = a + b  (mod q)`, coefficient-wise.
 pub fn poly_add(a: &Poly, b: &Poly) -> Poly {
-    let q = FIELD_MODULUS as u32;
     let n = a.n;
     let coeffs: Vec<u16> = a
         .coeffs
         .iter()
         .zip(b.coeffs.iter())
-        .map(|(&ai, &bi)| ((ai as u32 + bi as u32) % q) as u16)
+        .map(|(&ai, &bi)| barrett_reduce_unsigned((ai as u32 + bi as u32) as u64))
         .collect();
     Poly { coeffs, n }
 }
 
 /// `c = a − b  (mod q)`, coefficient-wise.
 pub fn poly_sub(a: &Poly, b: &Poly) -> Poly {
-    let q = FIELD_MODULUS as u32;
     let n = a.n;
     let coeffs: Vec<u16> = a
         .coeffs
         .iter()
         .zip(b.coeffs.iter())
-        .map(|(&ai, &bi)| ((ai as u32 + q - bi as u32) % q) as u16)
+        .map(|(&ai, &bi)| {
+            barrett_reduce_unsigned((ai as u32 + FIELD_MODULUS as u32 - bi as u32) as u64)
+        })
         .collect();
     Poly { coeffs, n }
 }
@@ -102,7 +101,6 @@ pub fn poly_mul(a: &Poly, b: &Poly) -> Poly {
     }
 
     // Schoolbook for non-power-of-2 sizes (QS128 N=144, QS192 N=196)
-    let q = FIELD_MODULUS as u64;
     let n = a.n;
 
     let mut temp = vec![0i64; 2 * n];
@@ -117,14 +115,13 @@ pub fn poly_mul(a: &Poly, b: &Poly) -> Poly {
     let mut coeffs = vec![0u16; n];
     for k in 0..n {
         let val = temp[k] - temp[k + n];
-        coeffs[k] = (val.rem_euclid(q as i64)) as u16;
+        coeffs[k] = barrett_reduce_signed(val) as u16;
     }
     Poly { coeffs, n }
 }
 
 /// Exposed for differential testing and verification (always the reliable schoolbook version)
 pub fn schoolbook_poly_mul(a: &Poly, b: &Poly) -> Poly {
-    let q = FIELD_MODULUS as u64;
     let n = a.n;
 
     let mut temp = vec![0i64; 2 * n];
@@ -137,7 +134,7 @@ pub fn schoolbook_poly_mul(a: &Poly, b: &Poly) -> Poly {
     let mut coeffs = vec![0u16; n];
     for k in 0..n {
         let val = temp[k] - temp[k + n];
-        coeffs[k] = (val.rem_euclid(q as i64)) as u16;
+        coeffs[k] = barrett_reduce_signed(val) as u16;
     }
     Poly { coeffs, n }
 }
@@ -150,12 +147,13 @@ pub fn schoolbook_poly_mul(a: &Poly, b: &Poly) -> Poly {
 #[allow(dead_code)]
 pub fn expand_a(seed: &[u8; 32], params: &Params) -> Poly {
     let n = params.total_spins;
-    let q = params.q;
     let mut prng = SpinPrng::with_params(seed, params);
     let raw = prng.next_bytes(n * 2);
     let mut coeffs = Vec::with_capacity(n);
     for chunk in raw.chunks(2) {
-        coeffs.push(u16::from_le_bytes([chunk[0], chunk[1]]) % q);
+        coeffs.push(barrett_reduce_unsigned(
+            u16::from_le_bytes([chunk[0], chunk[1]]) as u64,
+        ));
     }
     Poly { coeffs, n }
 }
@@ -166,7 +164,6 @@ pub fn expand_a(seed: &[u8; 32], params: &Params) -> Poly {
 /// experiments. The hardened KEM uses `sample_cbd_shake`.
 #[allow(dead_code)]
 pub fn sample_cbd(prng: &mut SpinPrng, eta: u8, n: usize) -> Poly {
-    let q = FIELD_MODULUS as u32;
     let bits_per_sample = 2 * eta as usize;
     let bytes_needed = (bits_per_sample * n).div_ceil(8);
     let random = prng.next_bytes(bytes_needed);
@@ -193,7 +190,7 @@ pub fn sample_cbd(prng: &mut SpinPrng, eta: u8, n: usize) -> Poly {
             }
             bit_pos += 1;
         }
-        coeffs.push(((a + q - b) % q) as u16);
+        coeffs.push(barrett_reduce_unsigned((a + FIELD_MODULUS as u32 - b) as u64));
     }
     Poly { coeffs, n }
 }

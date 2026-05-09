@@ -10,6 +10,7 @@
 //! Z_3329 supports at most a 256th root of unity (ord(Z*) = 3328 = 2⁸·13),
 //! so the NTT decomposes into 128 degree-2 factors, not 256 linear factors.
 
+use crate::core::reduce::barrett_reduce_signed;
 use core::hint::black_box;
 
 const Q: i32 = 3329;
@@ -39,10 +40,10 @@ pub fn ntt(r: &mut [i32; N]) {
             let zeta = ZETAS[k] as i64;
             k += 1;
             for j in start..start + len {
-                let t = (zeta * black_box(r[j + len]) as i64).rem_euclid(Q as i64) as i32;
+                let t = barrett_reduce_signed(zeta * black_box(r[j + len]) as i64);
                 let r_j = black_box(r[j]);
-                r[j] = ((r_j as i64 + t as i64).rem_euclid(Q as i64)) as i32;
-                r[j + len] = ((r_j as i64 - t as i64).rem_euclid(Q as i64)) as i32;
+                r[j] = barrett_reduce_signed(r_j as i64 + t as i64);
+                r[j + len] = barrett_reduce_signed(r_j as i64 - t as i64);
             }
         }
     }
@@ -59,15 +60,15 @@ pub fn inv_ntt(r: &mut [i32; N]) {
             for j in start..start + len {
                 let r_j = black_box(r[j]) as i64;
                 let r_jl = black_box(r[j + len]) as i64;
-                r[j] = ((r_j + r_jl).rem_euclid(Q as i64)) as i32;
-                r[j + len] = ((zeta * (r_jl - r_j)).rem_euclid(Q as i64)) as i32;
+                r[j] = barrett_reduce_signed(r_j + r_jl);
+                r[j + len] = barrett_reduce_signed(zeta * (r_jl - r_j));
             }
         }
     }
     // Scale by N/2⁻¹ = 128⁻¹ mod Q = 3303
     let f = 3303i64;
     for x in r.iter_mut() {
-        *x = ((black_box(*x) as i64 * f).rem_euclid(Q as i64)) as i32;
+        *x = barrett_reduce_signed(black_box(*x) as i64 * f);
     }
 }
 
@@ -80,21 +81,23 @@ fn base_mul(a: &[i32], b: &[i32]) -> [i32; N] {
     let mut r = [0i32; N];
     for i in 0..(N / 4) {
         let zeta = ZETAS[64 + i] as i64;
-        let neg_zeta = (Q as i64 - zeta) % Q as i64;
+        let neg_zeta = Q as i64 - zeta; // Q - zeta is already in [0, Q)
 
         // First pair in group: indices [4i, 4i+1], twiddle = +zeta
         let j = 4 * i;
-        r[j] = ((a[j] as i64 * b[j] as i64 + a[j + 1] as i64 * b[j + 1] as i64 * zeta)
-            .rem_euclid(Q as i64)) as i32;
-        r[j + 1] = ((a[j] as i64 * b[j + 1] as i64 + a[j + 1] as i64 * b[j] as i64)
-            .rem_euclid(Q as i64)) as i32;
+        let t0 = barrett_reduce_signed(a[j + 1] as i64 * b[j + 1] as i64);
+        r[j] = barrett_reduce_signed(a[j] as i64 * b[j] as i64 + t0 as i64 * zeta);
+        r[j + 1] = barrett_reduce_signed(
+            a[j] as i64 * b[j + 1] as i64 + a[j + 1] as i64 * b[j] as i64,
+        );
 
         // Second pair in group: indices [4i+2, 4i+3], twiddle = −zeta
         let j = 4 * i + 2;
-        r[j] = ((a[j] as i64 * b[j] as i64 + a[j + 1] as i64 * b[j + 1] as i64 * neg_zeta)
-            .rem_euclid(Q as i64)) as i32;
-        r[j + 1] = ((a[j] as i64 * b[j + 1] as i64 + a[j + 1] as i64 * b[j] as i64)
-            .rem_euclid(Q as i64)) as i32;
+        let t1 = barrett_reduce_signed(a[j + 1] as i64 * b[j + 1] as i64);
+        r[j] = barrett_reduce_signed(a[j] as i64 * b[j] as i64 + t1 as i64 * neg_zeta);
+        r[j + 1] = barrett_reduce_signed(
+            a[j] as i64 * b[j + 1] as i64 + a[j + 1] as i64 * b[j] as i64,
+        );
     }
     r
 }
@@ -117,7 +120,9 @@ pub fn coeffs_to_i32(c: &[u16]) -> [i32; N] {
     o
 }
 pub fn i32_to_u16(a: &[i32; N]) -> Vec<u16> {
-    a.iter().map(|&x| ((x % Q + Q) % Q) as u16).collect()
+    a.iter()
+        .map(|&x| barrett_reduce_signed(x as i64) as u16)
+        .collect()
 }
 
 #[cfg(test)]

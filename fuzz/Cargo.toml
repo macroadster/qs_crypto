@@ -1,0 +1,56 @@
+[package]
+name = "qs_crypto-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.qs_crypto]
+path = ".."
+
+[[bin]]
+name = "fuzz_ciphertext"
+path = "fuzz_targets/fuzz_ciphertext.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_public_key"
+path = "fuzz_targets/fuzz_public_key.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_private_key"
+path = "fuzz_targets/fuzz_private_key.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_session_restore"
+path = "fuzz_targets/fuzz_session_restore.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_registration_record"
+path = "fuzz_targets/fuzz_registration_record.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_aead_decrypt"
+path = "fuzz_targets/fuzz_aead_decrypt.rs"
+test = false
+doc = false
+bench = false

@@ -17,6 +17,7 @@ use crate::primitives::hash::spin_hash;
 /// Implicit rejection: if the FO re-encapsulation check fails, a
 /// deterministic but unrelated secret is returned (derived from sk ‖ ct)
 /// so the caller cannot distinguish valid from invalid ciphertexts.
+#[inline(never)]
 pub fn decapsulate(sk: &PrivateKey, ct: &Ciphertext) -> crate::Result<SharedSecret> {
     let sk_bytes = sk.as_bytes();
     let ct_bytes = ct.as_bytes();

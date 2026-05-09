@@ -4,4 +4,5 @@
 //! cryptographic primitive in the library.
 
 pub mod lattice;
+pub(crate) mod reduce;
 pub mod sponge;

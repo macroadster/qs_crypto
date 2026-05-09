@@ -45,6 +45,7 @@ pub struct AeadCiphertext {
 }
 
 /// Derive the SpinSponge subkey contribution from (key, nonce, aad).
+#[inline(never)]
 fn derive_spin_subkey(key: &[u8; 32], nonce: &[u8; 16], aad: &[u8]) -> [u8; 32] {
     let mut sponge = SpinSponge::new(&Params::default());
 
