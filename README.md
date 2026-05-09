@@ -94,11 +94,7 @@ cargo build
 cargo test
 ```
 
-`cargo test` runs 8 structural tests that validate parameter sets, key types, and serialization. 15 additional cryptographic tests are `#[ignore]`d until the core implementations are filled in — run them explicitly with:
-
-```bash
-cargo test -- --ignored
-```
+`cargo test` runs 70 tests covering all four layers: lattice/sponge properties, hash/KDF/PRNG/AEAD primitives, KEM roundtrips at all security levels, session encrypt/decrypt/save/restore, PAKE handshake, visual fingerprints, and authentication failure paths.
 
 ---
 
@@ -207,24 +203,25 @@ Three parameter sets are defined, defaulting to QS-256:
 
 ## Status
 
-This project is in the **scaffold / stub API** phase. The full architecture is
-in place with typed interfaces; implementations will be filled in layer by layer.
+All four layers are **fully implemented** with 70 passing tests, zero warnings,
+and clean clippy/fmt. The library is feature-complete for its research scope.
 
-**What exists today:**
-- Complete Rust crate with the four-layer module structure
-- Typed public API with `Zeroize` on secret material
-- 23 integration tests (8 passing, 15 pending implementation)
-- Full technical design document ([DESIGN_PROPOSAL.md](DESIGN_PROPOSAL.md))
-- Original Python prototypes preserved in `legacy/`
+**Implemented:**
+- [x] Layer 0 — SpinLattice engine (triangular Z_q lattice with cubing S-box) and SpinSponge (10\*1 padding, absorb/squeeze)
+- [x] Layer 1 — SpinHash, SpinPRNG, SpinKDF (HKDF-style), SpinAEAD (duplex-mode with constant-time tag verification)
+- [x] Layer 2 — Spin Glass KEM (KeyGen, Encaps, Decaps) with Fujisaki-Okamoto transform and implicit rejection
+- [x] Layer 3 — OPAQUE-Spin PAKE, Double Ratchet (symmetric + KEM ratchet), Session (encrypt/decrypt/save/restore)
+- [x] Visual fingerprint renderer (plain + identity-bound)
+- [x] 70 integration tests across all layers
+- [x] Full technical design document ([DESIGN_PROPOSAL.md](DESIGN_PROPOSAL.md))
+- [x] Secret material auto-zeroed via `Zeroize` + `ZeroizeOnDrop`
+- [x] Constant-time tag comparison via `subtle` crate
 
-**What's ahead:**
-- [ ] Layer 0 — SpinLattice engine and SpinSponge construction
-- [ ] Layer 1 — SpinHash, SpinPRNG, SpinKDF, SpinAEAD primitives
-- [ ] Layer 2 — Spin Glass KEM (KeyGen, Encaps, Decaps) with FO transform
-- [ ] Layer 3 — OPAQUE-Spin PAKE, Double Ratchet, Session protocol
+**Future work (not required for the research library):**
 - [ ] Statistical validation (NIST SP 800-22, TestU01)
-- [ ] Visual fingerprint renderer
 - [ ] Hybrid mode (Spin Glass KEM + X25519 fallback)
+- [ ] NTT-based polynomial multiplication (currently schoolbook O(N^2))
+- [ ] Side-channel hardening (constant-time throughout)
 - [ ] Formal cryptanalysis of SG-LWE
 
 ### Honest Caveats

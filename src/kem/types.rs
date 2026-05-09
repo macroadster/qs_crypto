@@ -61,9 +61,8 @@ impl PrivateKey {
 
 impl PartialEq for PrivateKey {
     fn eq(&self, other: &Self) -> bool {
-        // Constant-time comparison would be preferred here;
-        // for the stub we use a plain comparison.
-        self.data == other.data
+        use subtle::ConstantTimeEq;
+        self.data.ct_eq(&other.data).into()
     }
 }
 impl Eq for PrivateKey {}
@@ -109,6 +108,10 @@ impl Ciphertext {
 pub struct SharedSecret([u8; 32]);
 
 impl SharedSecret {
+    pub fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }

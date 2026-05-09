@@ -7,7 +7,20 @@
 //!     3. Squeeze(32)
 //! ```
 
+use crate::core::sponge::SpinSponge;
+use crate::params::Params;
+
 /// Compute a 32-byte hash of `data` using the spin-glass sponge.
-pub fn spin_hash(_data: &[u8]) -> [u8; 32] {
-    todo!("Layer 1: SpinHash — absorb with domain sep 0x01, squeeze 32 bytes")
+pub fn spin_hash(data: &[u8]) -> [u8; 32] {
+    let mut sponge = SpinSponge::new(&Params::default());
+
+    let mut input = Vec::with_capacity(1 + data.len());
+    input.push(0x01); // domain separator
+    input.extend_from_slice(data);
+    sponge.absorb(&input);
+
+    let out = sponge.squeeze(32);
+    let mut digest = [0u8; 32];
+    digest.copy_from_slice(&out);
+    digest
 }

@@ -8,7 +8,6 @@ use crate::params::Params;
 
 /// A CSPRNG backed by the spin-glass sponge.
 pub struct SpinPrng {
-    #[allow(dead_code)]
     sponge: SpinSponge,
 }
 
@@ -17,27 +16,26 @@ impl SpinPrng {
     ///
     /// Internally: absorbs `0x02 ‖ seed` into a fresh sponge.
     pub fn new(seed: &[u8]) -> Self {
-        let _ = seed;
-        Self {
-            sponge: SpinSponge::new(&Params::default()),
-        }
+        Self::with_params(seed, &Params::default())
     }
 
     /// Seed a PRNG using explicit parameters.
     pub fn with_params(seed: &[u8], params: &Params) -> Self {
-        let _ = seed;
-        Self {
-            sponge: SpinSponge::new(params),
-        }
+        let mut sponge = SpinSponge::new(params);
+        let mut input = Vec::with_capacity(1 + seed.len());
+        input.push(0x02); // domain separator
+        input.extend_from_slice(seed);
+        sponge.absorb(&input);
+        Self { sponge }
     }
 
     /// Generate `num_bytes` of pseudorandom output.
-    pub fn next_bytes(&mut self, _num_bytes: usize) -> Vec<u8> {
-        todo!("Layer 1: SpinPRNG — squeeze requested bytes")
+    pub fn next_bytes(&mut self, num_bytes: usize) -> Vec<u8> {
+        self.sponge.squeeze(num_bytes)
     }
 
     /// Mix additional entropy into the PRNG state.
-    pub fn reseed(&mut self, _entropy: &[u8]) {
-        todo!("Layer 1: SpinPRNG — absorb additional entropy")
+    pub fn reseed(&mut self, entropy: &[u8]) {
+        self.sponge.absorb(entropy);
     }
 }

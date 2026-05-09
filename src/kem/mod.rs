@@ -10,6 +10,7 @@ pub mod types;
 mod decaps;
 mod encaps;
 mod keygen;
+pub(crate) mod ring;
 
 pub use decaps::decapsulate;
 pub use encaps::encapsulate;

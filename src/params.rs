@@ -13,6 +13,25 @@ pub enum SecurityLevel {
     QS256,
 }
 
+impl SecurityLevel {
+    pub fn to_byte(self) -> u8 {
+        match self {
+            SecurityLevel::QS128 => 0x01,
+            SecurityLevel::QS192 => 0x02,
+            SecurityLevel::QS256 => 0x03,
+        }
+    }
+
+    pub fn from_byte(b: u8) -> Option<Self> {
+        match b {
+            0x01 => Some(SecurityLevel::QS128),
+            0x02 => Some(SecurityLevel::QS192),
+            0x03 => Some(SecurityLevel::QS256),
+            _ => None,
+        }
+    }
+}
+
 /// Complete parameter set governing all layers of the library.
 #[derive(Debug, Clone)]
 pub struct Params {
@@ -71,6 +90,17 @@ impl Params {
                 cbd_eta: 2,
                 frustration_eta: 3,
             },
+        }
+    }
+}
+
+impl Params {
+    /// Number of random coin bytes used internally by the KEM FO transform.
+    pub fn coin_bytes(&self) -> usize {
+        match self.security_level {
+            SecurityLevel::QS128 => 16,
+            SecurityLevel::QS192 => 24,
+            SecurityLevel::QS256 => 32,
         }
     }
 }
