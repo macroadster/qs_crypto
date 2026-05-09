@@ -11,6 +11,10 @@ use crate::core::sponge::SpinSponge;
 use crate::params::Params;
 
 /// Compute a 32-byte hash of `data` using the spin-glass sponge.
+///
+/// Always uses the QS-256 sponge parameters regardless of the KEM
+/// security level in use — the symmetric primitives operate at a
+/// fixed strength.
 pub fn spin_hash(data: &[u8]) -> [u8; 32] {
     let mut sponge = SpinSponge::new(&Params::default());
 

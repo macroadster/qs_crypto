@@ -20,6 +20,11 @@ use crate::primitives::hash::spin_hash;
 pub fn decapsulate(sk: &PrivateKey, ct: &Ciphertext) -> crate::Result<SharedSecret> {
     let sk_bytes = sk.as_bytes();
     let ct_bytes = ct.as_bytes();
+
+    if sk_bytes[0] != ct_bytes[0] {
+        return Err(crate::Error::DecapsulationFailed);
+    }
+
     let params = params_from_level_byte(sk_bytes[0]);
     let n = params.total_spins;
     let coin_len = params.coin_bytes();

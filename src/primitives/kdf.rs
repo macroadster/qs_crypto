@@ -9,8 +9,23 @@
 use crate::core::sponge::SpinSponge;
 use crate::params::Params;
 
+/// Maximum output length: 255 × 32 = 8160 bytes (HKDF-style limit).
+const MAX_OUTPUT_LEN: usize = 255 * 32;
+
 /// Derive `length` bytes of key material.
+///
+/// Always uses the QS-256 sponge parameters regardless of the KEM
+/// security level in use — the symmetric primitives operate at a
+/// fixed strength.
+///
+/// # Panics
+///
+/// Panics if `length` exceeds 8160 bytes (255 expand blocks).
 pub fn spin_kdf(key: &[u8], salt: &[u8], info: &[u8], length: usize) -> Vec<u8> {
+    assert!(
+        length <= MAX_OUTPUT_LEN,
+        "spin_kdf: requested {length} bytes exceeds maximum {MAX_OUTPUT_LEN}"
+    );
     let params = Params::default();
 
     // ── EXTRACT ────────────────────────────────────────────────
@@ -23,12 +38,14 @@ pub fn spin_kdf(key: &[u8], salt: &[u8], info: &[u8], length: usize) -> Vec<u8> 
     let prk = extract.squeeze(32);
 
     // ── EXPAND ─────────────────────────────────────────────────
-    let mut expand = SpinSponge::new(&params);
+    // Each block uses a fresh sponge keyed by PRK (HKDF-Expand style):
+    //   T(i) = Sponge(PRK ‖ T(i-1) ‖ info ‖ counter)
     let mut output = Vec::with_capacity(length);
     let mut prev_block: Vec<u8> = Vec::new();
     let mut counter: u8 = 1;
 
     while output.len() < length {
+        let mut expand = SpinSponge::new(&params);
         let mut expand_input = Vec::new();
         expand_input.extend_from_slice(&prk);
         expand_input.extend_from_slice(&prev_block);

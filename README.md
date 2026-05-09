@@ -96,6 +96,51 @@ cargo test
 
 `cargo test` runs 70 tests covering all four layers: lattice/sponge properties, hash/KDF/PRNG/AEAD primitives, KEM roundtrips at all security levels, session encrypt/decrypt/save/restore, PAKE handshake, visual fingerprints, and authentication failure paths.
 
+### CLI Demo
+
+Run the interactive demo to verify every layer works end-to-end:
+
+```bash
+cargo run --bin demo
+```
+
+This walks through key generation, KEM encapsulation/decapsulation, symmetric primitives (hash, KDF, AEAD), a full Alice ↔ Bob encrypted session, PAKE handshake, and visual fingerprint generation — printing `[PASS]`/`[FAIL]` for each check. Exits with code 1 if anything fails.
+
+Example output:
+
+```
+  QS-Crypto — Spin Glass Cryptography Demo
+  =========================================
+
+  1. Key Generation (all security levels)
+    QS128: Public key 321 bytes, Private key 610 bytes
+    QS192: Public key 425 bytes, Private key 818 bytes
+    QS256: Public key 545 bytes, Private key 1058 bytes
+
+  2. KEM Encapsulation / Decapsulation
+    Secrets match: YES [PASS]
+    Implicit rejection (wrong key): different secret [PASS]
+
+  3. Symmetric Primitives
+    SpinHash deterministic: YES [PASS]
+    Avalanche (1 char change): 91/256 bits flipped [PASS]
+    SpinAEAD roundtrip: [PASS]
+    Tamper detected: YES [PASS]
+
+  4. Session Encryption (Alice <-> Bob)
+    Bidirectional messaging: [PASS]
+    Forward secrecy: YES [PASS]
+
+  5. PAKE — Password-Authenticated Key Exchange
+    Keys match: YES [PASS]
+    Wrong password rejected: YES [PASS]
+
+  6. Visual Fingerprint
+    Deterministic: YES [PASS]
+
+  All checks passed. The spin glass lattice holds.
+```
+
 ---
 
 ## Usage (API Preview)

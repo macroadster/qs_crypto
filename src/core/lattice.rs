@@ -81,6 +81,12 @@ impl SpinLattice {
     ///
     /// Uses FNV-1a to hash the input into a 64-bit seed, then SplitMix64
     /// to expand it across every spin and coupling.
+    ///
+    /// **Note:** FNV-1a and SplitMix64 are fast non-cryptographic
+    /// functions. This is acceptable here because the seeding only
+    /// sets initial lattice state and coupling constants — it is not
+    /// used to derive key material. Cryptographic entropy enters
+    /// through `getrandom` in the KEM and PAKE layers.
     pub fn seed_from_bytes(&mut self, data: &[u8]) {
         // FNV-1a hash of input → 64-bit seed
         let mut hash: u64 = 0xcbf29ce484222325;

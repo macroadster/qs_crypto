@@ -7,6 +7,11 @@
 //! The symmetric ratchet advances on every message.  A KEM ratchet
 //! step occurs when the conversation "turns" (not yet triggered
 //! automatically in this implementation).
+//!
+//! **Limitation:** messages must be delivered in order. There is no
+//! skipped-message-key cache, so out-of-order or dropped messages
+//! will cause decryption failures for all subsequent messages on
+//! that chain.
 
 use crate::kem::types::{KeyPair, PublicKey};
 use crate::primitives::kdf::spin_kdf;

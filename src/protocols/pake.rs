@@ -1,8 +1,10 @@
-//! OPAQUE-Spin — Password-Authenticated Key Exchange.
+//! Simplified PAKE — Password-Authenticated Key Exchange.
 //!
-//! Follows the OPAQUE framework (Jarecki et al., 2018) instantiated
-//! with the Spin Glass KEM and SpinAEAD. Resists offline dictionary
-//! attacks even if the server is compromised.
+//! Inspired by the OPAQUE framework (Jarecki et al., 2018) but
+//! significantly simplified: no OPRF blinding, no client identity in
+//! the first message, and a 2-message flow instead of the full
+//! 3-message OPAQUE protocol. Instantiated with the Spin Glass KEM
+//! and SpinAEAD.
 //!
 //! ## Protocol sketch
 //!

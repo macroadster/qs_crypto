@@ -25,6 +25,9 @@ pub struct AeadCiphertext {
 }
 
 /// Initialize a sponge with key, nonce, and associated data.
+///
+/// Always uses QS-256 sponge parameters — the symmetric primitives
+/// operate at a fixed strength regardless of the KEM security level.
 fn init_sponge(key: &[u8; 32], nonce: &[u8; 16], aad: &[u8]) -> SpinSponge {
     let mut sponge = SpinSponge::new(&Params::default());
 
