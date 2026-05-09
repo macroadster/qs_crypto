@@ -539,6 +539,8 @@ dependencies = [
  "getrandom",
  "ml-kem",
  "rand_core",
+ "serde",
+ "serde_json",
  "sha3",
  "subtle",
  "thiserror",

@@ -3,7 +3,9 @@
 ## Status
 
 - **Tier 1 — COMPLETE** (committed): Hybrid AEAD, vetted nonces/KDFs, zeroization
-- **Tiers 2–5 — TODO** (documented below)
+- **Tier 2 — COMPLETE** (committed): Standard sponge squeeze, SIV mode, auth tag rationale (Option B), versioned domain separators
+- **Tier 3 — COMPLETE** (committed): Differential analysis, KAT vectors, NIST/BigCrush infrastructure
+- **Tiers 4–5 — TODO** (documented below)
 
 ---
 

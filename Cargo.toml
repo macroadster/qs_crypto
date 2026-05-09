@@ -20,9 +20,13 @@ x25519-dalek = { version = "2", features = ["static_secrets"] }
 ml-kem = "0.2"  # For full PQ + experimental hybrid
 chacha20poly1305 = "0.10"
 zeroize = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [features]
 default = []
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
