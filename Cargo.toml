@@ -1,13 +1,27 @@
 [package]
 name = "qs_crypto"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Cryptographic library derived from spin glass quantum simulation"
 readme = "README.md"
 license = "MIT OR Apache-2.0"
 
+[[bench]]
+name = "qs_crypto"
+harness = false
+
 [dependencies]
 getrandom = "0.2"
+rand_core = { version = "0.6", features = ["getrandom"] }
+sha3 = "0.10"
 subtle = "2"
 thiserror = "2"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+ml-kem = "0.2"  # For full PQ + experimental hybrid
 zeroize = { version = "1", features = ["derive"] }
+
+[features]
+default = []
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }

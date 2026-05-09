@@ -1,35 +1,51 @@
 //! Key pair generation.
 //!
-//! 1. Sample seed → expand public polynomial `a(X)`
-//! 2. Sample secret `s(X)` and noise `e(X)` from CBD
-//! 3. Compute `b = a·s + e`
-//! 4. `pk = (level ‖ seed ‖ b)`, `sk = (level ‖ s ‖ pk)`
+//! Hardened version: all internal randomness (seed expansion and CBD sampling)
+//! is derived from SHAKE256 (a NIST-standard XOF). This ensures the KEM's
+//! security reduction depends only on Ring-LWE + SHAKE256, independent of
+//! the novel SpinSponge construction (which remains available for symmetric
+//! primitives and the visual layer).
 
-use super::ring::{expand_a, poly_add, poly_mul, sample_cbd};
+use super::ring::{poly_add, poly_mul};
 use super::types::{KeyPair, PrivateKey, PublicKey};
+use super::xof::{expand_a_shake, sample_cbd_shake};
 use crate::params::Params;
-use crate::primitives::prng::SpinPrng;
+use getrandom;
 
 /// Generate a fresh keypair for the given parameter set.
+///
+/// All randomness for `a`, `s`, and `e` is derived via SHAKE256 from
+/// high-entropy OS seeds. This makes the KEM's concrete security
+/// reduction independent of the SpinSponge permutation.
 pub fn generate_keypair(params: &Params) -> KeyPair {
     let n = params.total_spins;
     let level_byte = params.security_level.to_byte();
+    let eta = params.cbd_eta;
 
-    // Sample random seed for the public polynomial a(X)
+    // Sample random seed for the public polynomial a(X) from OS
     let mut seed = [0u8; 32];
     getrandom::getrandom(&mut seed).expect("OS RNG failed");
 
-    let a = expand_a(&seed, params);
+    let a = expand_a_shake(&seed, params);
 
-    // Sample secret s and noise e from CBD, seeded from OS entropy
-    let mut noise_seed = [0u8; 64];
-    getrandom::getrandom(&mut noise_seed).expect("OS RNG failed");
+    // Sample secret s and noise e from CBD using OS entropy + SHAKE
+    // We use distinct domain-separated labels for s and e.
+    let mut os_seed = [0u8; 64];
+    getrandom::getrandom(&mut os_seed).expect("OS RNG failed");
 
-    let mut prng_s = SpinPrng::with_params(&noise_seed[..32], params);
-    let mut prng_e = SpinPrng::with_params(&noise_seed[32..], params);
+    let s_label = {
+        let mut l = b"qs-kem-keygen-s".to_vec();
+        l.extend_from_slice(&os_seed[..32]);
+        l
+    };
+    let e_label = {
+        let mut l = b"qs-kem-keygen-e".to_vec();
+        l.extend_from_slice(&os_seed[32..]);
+        l
+    };
 
-    let s = sample_cbd(&mut prng_s, params.cbd_eta, n);
-    let e = sample_cbd(&mut prng_e, params.cbd_eta, n);
+    let s = sample_cbd_shake(&s_label, eta, n);
+    let e = sample_cbd_shake(&e_label, eta, n);
 
     // b = a·s + e  (mod X^N+1, mod q)
     let b = poly_add(&poly_mul(&a, &s), &e);

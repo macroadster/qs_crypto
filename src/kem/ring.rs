@@ -1,13 +1,13 @@
 //! Polynomial arithmetic over Z_q\[X\]/(X^N + 1).
 //!
-//! Provides the algebraic foundation for the Ring-LWE KEM.  Operations
-//! use schoolbook multiplication (O(N²)) which is acceptable for a
-//! research library; NTT-based O(N log N) multiplication can be added
-//! later.
+//! Provides the algebraic foundation for the Ring-LWE KEM.  N=256 (QS256)
+//! uses NTT-based O(N log N) multiplication; other sizes fall back to
+//! schoolbook O(N²).
 
 use crate::params::{Params, SecurityLevel, FIELD_MODULUS};
 use crate::primitives::hash::spin_hash;
 use crate::primitives::prng::SpinPrng;
+use core::hint::black_box;
 
 /// A polynomial in Z_q\[X\]/(X^N + 1), stored as a vector of coefficients.
 #[derive(Clone, Debug)]
@@ -76,12 +76,45 @@ pub fn poly_sub(a: &Poly, b: &Poly) -> Poly {
     Poly { coeffs, n }
 }
 
-/// `c = a · b  (mod X^N + 1, mod q)` — schoolbook multiplication.
+/// `c = a · b  (mod X^N + 1, mod q)`
+///
+/// Uses NTT (O(N log N)) for N=256, schoolbook (O(N²)) for other sizes.
 pub fn poly_mul(a: &Poly, b: &Poly) -> Poly {
+    if a.n == 256 {
+        use super::ntt;
+        let aa = ntt::coeffs_to_i32(&a.coeffs);
+        let bb = ntt::coeffs_to_i32(&b.coeffs);
+        let res = ntt::ntt_mul(&aa, &bb);
+        let coeffs = ntt::i32_to_u16(&res);
+        return Poly { coeffs, n: a.n };
+    }
+
+    // Schoolbook for non-power-of-2 sizes (QS128 N=144, QS192 N=196)
     let q = FIELD_MODULUS as u64;
     let n = a.n;
 
-    // Accumulate in i64 to handle the subtraction from reduction
+    let mut temp = vec![0i64; 2 * n];
+    for i in 0..n {
+        for j in 0..n {
+            let ai = black_box(a.coeffs[i] as i64);
+            let bj = black_box(b.coeffs[j] as i64);
+            temp[i + j] += ai * bj;
+        }
+    }
+
+    let mut coeffs = vec![0u16; n];
+    for k in 0..n {
+        let val = temp[k] - temp[k + n];
+        coeffs[k] = (val.rem_euclid(q as i64)) as u16;
+    }
+    Poly { coeffs, n }
+}
+
+/// Exposed for differential testing and verification (always the reliable schoolbook version)
+pub fn schoolbook_poly_mul(a: &Poly, b: &Poly) -> Poly {
+    let q = FIELD_MODULUS as u64;
+    let n = a.n;
+
     let mut temp = vec![0i64; 2 * n];
     for i in 0..n {
         for j in 0..n {
@@ -89,11 +122,9 @@ pub fn poly_mul(a: &Poly, b: &Poly) -> Poly {
         }
     }
 
-    // Reduce mod X^N + 1:  X^{N+k} ≡ −X^k
     let mut coeffs = vec![0u16; n];
     for k in 0..n {
         let val = temp[k] - temp[k + n];
-        // Bring into [0, q)
         coeffs[k] = (val.rem_euclid(q as i64)) as u16;
     }
     Poly { coeffs, n }
@@ -101,6 +132,10 @@ pub fn poly_mul(a: &Poly, b: &Poly) -> Poly {
 
 /// Deterministically expand a 32-byte `seed` into a uniformly random
 /// polynomial over Z_q (used for the public matrix element `a`).
+///
+/// This SpinPrng-based version is retained for research / "pure physics"
+/// experiments. The hardened KEM uses `expand_a_shake`.
+#[allow(dead_code)]
 pub fn expand_a(seed: &[u8; 32], params: &Params) -> Poly {
     let n = params.total_spins;
     let q = params.q;
@@ -114,6 +149,10 @@ pub fn expand_a(seed: &[u8; 32], params: &Params) -> Poly {
 }
 
 /// Sample a polynomial from the Centered Binomial Distribution CBD(η).
+///
+/// This SpinPrng-based version is retained for research / "pure physics"
+/// experiments. The hardened KEM uses `sample_cbd_shake`.
+#[allow(dead_code)]
 pub fn sample_cbd(prng: &mut SpinPrng, eta: u8, n: usize) -> Poly {
     let q = FIELD_MODULUS as u32;
     let bits_per_sample = 2 * eta as usize;

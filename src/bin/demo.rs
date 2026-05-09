@@ -23,7 +23,11 @@ fn main() {
     // ── 1. Key Generation ──────────────────────────────────────────
     separator("1. Key Generation (all security levels)");
 
-    for level in [SecurityLevel::QS128, SecurityLevel::QS192, SecurityLevel::QS256] {
+    for level in [
+        SecurityLevel::QS128,
+        SecurityLevel::QS192,
+        SecurityLevel::QS256,
+    ] {
         let params = Params::from_security_level(level);
         let t = Instant::now();
         let kp = generate_keypair(&params);
@@ -46,25 +50,43 @@ fn main() {
     let encap_result = encapsulate(&keypair.public_key);
     let encap_time = t.elapsed();
 
-    println!("  Ciphertext   : {} bytes", encap_result.ciphertext.as_bytes().len());
-    println!("  Shared secret: {}...", &hex(encap_result.shared_secret.as_bytes())[..32]);
+    println!(
+        "  Ciphertext   : {} bytes",
+        encap_result.ciphertext.as_bytes().len()
+    );
+    println!(
+        "  Shared secret: {}...",
+        &hex(encap_result.shared_secret.as_bytes())[..32]
+    );
     println!("  Encaps time  : {:.2?}", encap_time);
 
     let t = Instant::now();
-    let decapped = decapsulate(&keypair.private_key, &encap_result.ciphertext)
-        .expect("decapsulation failed");
+    let decapped =
+        decapsulate(&keypair.private_key, &encap_result.ciphertext).expect("decapsulation failed");
     let decap_time = t.elapsed();
 
     let match_ok = encap_result.shared_secret.as_bytes() == decapped.as_bytes();
     println!("  Decaps time  : {:.2?}", decap_time);
-    println!("  Secrets match: {} {}", if match_ok { "YES" } else { "NO" }, if match_ok { "[PASS]" } else { "[FAIL]" });
+    println!(
+        "  Secrets match: {} {}",
+        if match_ok { "YES" } else { "NO" },
+        if match_ok { "[PASS]" } else { "[FAIL]" }
+    );
 
     // Implicit rejection test
     let other_kp = generate_keypair(&params);
     let wrong = decapsulate(&other_kp.private_key, &encap_result.ciphertext)
         .expect("implicit rejection should return a secret, not an error");
     let rejected = encap_result.shared_secret.as_bytes() != wrong.as_bytes();
-    println!("  Implicit rejection (wrong key): {} {}", if rejected { "different secret" } else { "SAME secret" }, if rejected { "[PASS]" } else { "[FAIL]" });
+    println!(
+        "  Implicit rejection (wrong key): {} {}",
+        if rejected {
+            "different secret"
+        } else {
+            "SAME secret"
+        },
+        if rejected { "[PASS]" } else { "[FAIL]" }
+    );
 
     // ── 3. Symmetric Primitives ────────────────────────────────────
     separator("3. Symmetric Primitives");
@@ -77,12 +99,27 @@ fn main() {
 
     // Verify determinism
     let digest2 = spin_hash(b"Hello, quantum spin glass!");
-    println!("    Deterministic: {} {}", if digest == digest2 { "YES" } else { "NO" }, if digest == digest2 { "[PASS]" } else { "[FAIL]" });
+    println!(
+        "    Deterministic: {} {}",
+        if digest == digest2 { "YES" } else { "NO" },
+        if digest == digest2 {
+            "[PASS]"
+        } else {
+            "[FAIL]"
+        }
+    );
 
     // Avalanche
     let digest3 = spin_hash(b"Hello, quantum spin glass?"); // last char changed
-    let diff_bits: u32 = digest.iter().zip(digest3.iter()).map(|(&a, &b)| (a ^ b).count_ones()).sum();
-    println!("    Avalanche (1 char change): {diff_bits}/256 bits flipped [{}]", if diff_bits > 64 { "PASS" } else { "FAIL" });
+    let diff_bits: u32 = digest
+        .iter()
+        .zip(digest3.iter())
+        .map(|(&a, &b)| (a ^ b).count_ones())
+        .sum();
+    println!(
+        "    Avalanche (1 char change): {diff_bits}/256 bits flipped [{}]",
+        if diff_bits > 64 { "PASS" } else { "FAIL" }
+    );
 
     println!();
 
@@ -103,19 +140,31 @@ fn main() {
     let ct = aead::encrypt(&aead_key, &nonce, aad_data, plaintext);
     println!("  SpinAEAD:");
     println!("    Plaintext : \"{}\"", String::from_utf8_lossy(plaintext));
-    println!("    Ciphertext: {}... ({} bytes)", &hex(&ct.ciphertext)[..32], ct.ciphertext.len());
+    println!(
+        "    Ciphertext: {}... ({} bytes)",
+        &hex(&ct.ciphertext)[..32],
+        ct.ciphertext.len()
+    );
     println!("    Tag       : {}", hex(&ct.tag));
 
     let pt = aead::decrypt(&aead_key, &nonce, aad_data, &ct.ciphertext, &ct.tag)
         .expect("AEAD decryption failed");
     let aead_ok = pt == plaintext;
-    println!("    Decrypted : \"{}\" {}", String::from_utf8_lossy(&pt), if aead_ok { "[PASS]" } else { "[FAIL]" });
+    println!(
+        "    Decrypted : \"{}\" {}",
+        String::from_utf8_lossy(&pt),
+        if aead_ok { "[PASS]" } else { "[FAIL]" }
+    );
 
     // Tamper detection
     let mut bad_ct = ct.ciphertext.clone();
     bad_ct[0] ^= 0xFF;
     let tamper_caught = aead::decrypt(&aead_key, &nonce, aad_data, &bad_ct, &ct.tag).is_err();
-    println!("    Tamper detected: {} {}", if tamper_caught { "YES" } else { "NO" }, if tamper_caught { "[PASS]" } else { "[FAIL]" });
+    println!(
+        "    Tamper detected: {} {}",
+        if tamper_caught { "YES" } else { "NO" },
+        if tamper_caught { "[PASS]" } else { "[FAIL]" }
+    );
 
     // ── 4. Session Encryption (Alice <-> Bob) ──────────────────────
     separator("4. Session Encryption (Alice <-> Bob)");
@@ -143,7 +192,11 @@ fn main() {
         let ok = pt == msg.as_bytes();
         println!("  {sender} -> Bob: \"{}\"", msg);
         println!("    Ciphertext: {} bytes", ct.len());
-        println!("    Decrypted : \"{}\" {}", String::from_utf8_lossy(&pt), if ok { "[PASS]" } else { "[FAIL]" });
+        println!(
+            "    Decrypted : \"{}\" {}",
+            String::from_utf8_lossy(&pt),
+            if ok { "[PASS]" } else { "[FAIL]" }
+        );
         println!();
     }
 
@@ -153,13 +206,21 @@ fn main() {
     let pt = alice.decrypt(&ct).expect("Alice failed to decrypt");
     let ok = pt == reply.as_bytes();
     println!("  Bob -> Alice: \"{}\"", reply);
-    println!("    Decrypted : \"{}\" {}", String::from_utf8_lossy(&pt), if ok { "[PASS]" } else { "[FAIL]" });
+    println!(
+        "    Decrypted : \"{}\" {}",
+        String::from_utf8_lossy(&pt),
+        if ok { "[PASS]" } else { "[FAIL]" }
+    );
 
     // Forward secrecy: each ciphertext is unique
     let ct1 = alice.encrypt(b"same");
     let ct2 = alice.encrypt(b"same");
     let fs_ok = ct1 != ct2;
-    println!("\n  Forward secrecy (same plaintext -> different ciphertext): {} {}", if fs_ok { "YES" } else { "NO" }, if fs_ok { "[PASS]" } else { "[FAIL]" });
+    println!(
+        "\n  Forward secrecy (same plaintext -> different ciphertext): {} {}",
+        if fs_ok { "YES" } else { "NO" },
+        if fs_ok { "[PASS]" } else { "[FAIL]" }
+    );
 
     // ── 5. PAKE Handshake ──────────────────────────────────────────
     separator("5. PAKE — Password-Authenticated Key Exchange");
@@ -190,7 +251,11 @@ fn main() {
     let pake_ok = client_key == server_key;
     println!("  Client key: {}...", &hex(&client_key)[..32]);
     println!("  Server key: {}...", &hex(&server_key)[..32]);
-    println!("  Keys match: {} {}", if pake_ok { "YES" } else { "NO" }, if pake_ok { "[PASS]" } else { "[FAIL]" });
+    println!(
+        "  Keys match: {} {}",
+        if pake_ok { "YES" } else { "NO" },
+        if pake_ok { "[PASS]" } else { "[FAIL]" }
+    );
 
     // Wrong password
     let record2 = pake_register(password, &generate_keypair(&params));
@@ -199,7 +264,11 @@ fn main() {
     let m1 = bad_client.start();
     let m2 = bad_server.respond(&m1).expect("server.respond failed");
     let wrong_rejected = bad_client.finalize(&m2).is_err();
-    println!("  Wrong password rejected: {} {}", if wrong_rejected { "YES" } else { "NO" }, if wrong_rejected { "[PASS]" } else { "[FAIL]" });
+    println!(
+        "  Wrong password rejected: {} {}",
+        if wrong_rejected { "YES" } else { "NO" },
+        if wrong_rejected { "[PASS]" } else { "[FAIL]" }
+    );
 
     // ── 6. Visual Fingerprint ──────────────────────────────────────
     separator("6. Visual Fingerprint");
@@ -216,13 +285,26 @@ fn main() {
 
     let fp2 = visual_fingerprint(&session_key_arr, 16, 16);
     let fp_det = fp == fp2;
-    println!("  Deterministic: {} {}", if fp_det { "YES" } else { "NO" }, if fp_det { "[PASS]" } else { "[FAIL]" });
+    println!(
+        "  Deterministic: {} {}",
+        if fp_det { "YES" } else { "NO" },
+        if fp_det { "[PASS]" } else { "[FAIL]" }
+    );
 
     // ── Summary ────────────────────────────────────────────────────
     separator("Summary");
 
-    let all_pass = match_ok && rejected && (digest == digest2) && (diff_bits > 64)
-        && aead_ok && tamper_caught && ok && fs_ok && pake_ok && wrong_rejected && fp_det;
+    let all_pass = match_ok
+        && rejected
+        && (digest == digest2)
+        && (diff_bits > 64)
+        && aead_ok
+        && tamper_caught
+        && ok
+        && fs_ok
+        && pake_ok
+        && wrong_rejected
+        && fp_det;
 
     if all_pass {
         println!("  All checks passed. The spin glass lattice holds.");

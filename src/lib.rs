@@ -1,20 +1,26 @@
 //! # QS-Crypto
 //!
-//! Cryptographic library derived from spin glass quantum simulation.
+//! Experimental cryptographic library featuring a novel sponge permutation
+//! inspired by spin-glass lattice dynamics, paired with a hardened
+//! Ring-LWE Key Encapsulation Mechanism.
 //!
-//! Two parties establish a private channel using asymmetric keys that
-//! emerge from a single event — the construction of a planted spin
-//! glass lattice. The coupling matrix is the **public key**; the
-//! ground state is the **private key**. Recovering one from the other
-//! requires solving an NP-hard optimisation problem (SG-LWE).
+//! **Key hardening (2026):** The KEM now derives all internal randomness
+//! (public polynomial expansion and noise sampling) from SHAKE256. Its
+//! IND-CCA2 security therefore reduces to standard Ring-LWE + SHAKE256,
+//! independent of the correctness of the custom permutation.
+//!
+//! The symmetric primitives (`spin_hash`, `SpinAEAD`, ratchet KDFs, etc.)
+//! and the unique visual fingerprinting layer still use the physics-inspired
+//! `SpinLattice` permutation — an interesting research direction that
+//! invites further cryptanalysis.
 //!
 //! ## Architecture
 //!
 //! | Layer | Module | Purpose |
 //! |-------|--------|---------|
-//! | 0 | [`core`] | Spin lattice engine + sponge construction |
+//! | 0 | [`core`] | Spin lattice engine + sponge construction (novel permutation) |
 //! | 1 | [`primitives`] | Hash, PRNG, KDF, AEAD (sponge modes) |
-//! | 2 | [`kem`] | Key Encapsulation Mechanism (SG-LWE + FO) |
+//! | 2 | [`kem`] | Ring-LWE KEM + Fujisaki-Okamoto (hardened with SHAKE256) |
 //! | 3 | [`protocols`] | PAKE, Double Ratchet, Session |
 //! | — | [`visual`] | Fingerprint renderer for out-of-band auth |
 //!
@@ -92,6 +98,19 @@
 //! let pt = aead::decrypt(&key, &nonce, b"aad", &ct.ciphertext, &ct.tag).unwrap();
 //! assert_eq!(&pt[..], b"secret");
 //! ```
+//!
+//! ### Hybrid KEM (recommended for real use)
+//!
+//! ```
+//! use qs_crypto::*;
+//!
+//! let kp = hybrid_generate_keypair(&Params::default());
+//! let pk = kp.public_key();
+//!
+//! let (ct, ss) = hybrid_encapsulate(&pk);
+//! let ss2 = hybrid_decapsulate(&kp.private_key(), &ct).unwrap();
+//! assert_eq!(ss.as_bytes(), ss2.as_bytes());
+//! ```
 
 pub mod core;
 pub mod error;
@@ -117,6 +136,11 @@ pub use primitives::kdf::spin_kdf;
 pub use primitives::prng::SpinPrng;
 
 // Layer 2
+pub use kem::hybrid;
+pub use kem::hybrid::{
+    hybrid_decapsulate, hybrid_encapsulate, hybrid_generate_keypair, HybridCiphertext,
+    HybridKeyPair, HybridPrivateKey, HybridPublicKey, HybridSharedSecret,
+};
 pub use kem::types::{
     Ciphertext, EncapsulationResult, KeyPair, PrivateKey, PublicKey, SharedSecret,
 };

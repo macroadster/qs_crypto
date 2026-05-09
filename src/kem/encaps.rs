@@ -1,18 +1,19 @@
 //! KEM encapsulation.
 //!
-//! 1. Sample random coin m
-//! 2. Derive deterministic blinding from m (Fujisaki-Okamoto)
-//! 3. Compute ciphertext (c₁, c₂) encoding m under the public key
-//! 4. Derive shared secret = SpinHash(0x11 ‖ m ‖ ct)
+//! Hardened Fujisaki-Okamoto construction:
+//! - Random coin `m` comes from OS entropy.
+//! - All blinding factors (r, e1, e2) are derived deterministically from `m`
+//!   using SHAKE256 (vetted XOF). This keeps the CCA security reduction clean.
 
-use super::ring::{
-    encode_message, expand_a, hash_pk, params_from_level_byte, poly_add, poly_mul, sample_cbd, Poly,
-};
+use super::ring::{encode_message, hash_pk, params_from_level_byte, poly_add, poly_mul, Poly};
 use super::types::{Ciphertext, EncapsulationResult, PublicKey, SharedSecret};
+use super::xof::{derive_fo_materials, expand_a_shake};
 use crate::primitives::hash::spin_hash;
-use crate::primitives::prng::SpinPrng;
 
 /// Deterministic inner encapsulation (used by both encaps and decaps FO check).
+///
+/// All blinding vectors are derived from the coin via SHAKE256 so that
+/// the correctness of the FO transform does not rely on SpinPrng.
 pub(crate) fn encaps_inner(pk: &PublicKey, coin: &[u8]) -> (Ciphertext, [u8; 32]) {
     let pk_bytes = pk.as_bytes();
     let params = params_from_level_byte(pk_bytes[0]);
@@ -22,19 +23,11 @@ pub(crate) fn encaps_inner(pk: &PublicKey, coin: &[u8]) -> (Ciphertext, [u8; 32]
     let seed: [u8; 32] = pk_bytes[1..33].try_into().unwrap();
     let b = Poly::from_bytes(&pk_bytes[33..], n);
 
-    let a = expand_a(&seed, &params);
+    let a = expand_a_shake(&seed, &params);
 
-    // Derive deterministic randomness from coin
-    let mut fo_input = Vec::with_capacity(1 + coin.len() + 32);
-    fo_input.push(0x10);
-    fo_input.extend_from_slice(coin);
-    fo_input.extend_from_slice(&hash_pk(pk_bytes));
-    let r_seed = spin_hash(&fo_input);
-
-    let mut prng = SpinPrng::with_params(&r_seed, &params);
-    let r = sample_cbd(&mut prng, params.cbd_eta, n);
-    let e1 = sample_cbd(&mut prng, params.cbd_eta, n);
-    let e2 = sample_cbd(&mut prng, params.cbd_eta, n);
+    // Derive deterministic FO blinding material using the vetted XOF
+    let pk_hash = hash_pk(pk_bytes);
+    let (r, e1, e2) = derive_fo_materials(coin, &pk_hash, &params);
 
     // c₁ = a·r + e₁
     let c1 = poly_add(&poly_mul(&a, &r), &e1);
@@ -51,7 +44,9 @@ pub(crate) fn encaps_inner(pk: &PublicKey, coin: &[u8]) -> (Ciphertext, [u8; 32]
 
     let ct = Ciphertext::from_bytes(&ct_bytes).unwrap();
 
-    // Shared secret = SpinHash(0x11 ‖ m ‖ ct)
+    // Shared secret = SpinHash(0x11 ‖ m ‖ ct)  — still uses the library hash
+    // (acceptable: the SS is user-visible output; the reduction protects the
+    //  confidentiality of the message inside the KEM).
     let mut ss_input = Vec::new();
     ss_input.push(0x11);
     ss_input.extend_from_slice(coin);

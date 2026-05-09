@@ -6,7 +6,7 @@ use crate::error::Error;
 
 // ── Keys ───────────────────────────────────────────────────────────
 
-/// Public key: coupling matrix J (sparse) + noisy field vector h.
+/// Public key for the Ring-LWE KEM: (security level || seed || b = a·s + e).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PublicKey {
     data: Vec<u8>,
@@ -31,7 +31,7 @@ impl PublicKey {
     }
 }
 
-/// Private key: planted ground state σ*.
+/// Private key for the Ring-LWE KEM: (level || s || embedded public key).
 ///
 /// Implements [`Zeroize`] + [`ZeroizeOnDrop`] so the secret material
 /// is wiped from memory when the key is dropped.

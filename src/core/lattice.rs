@@ -1,8 +1,9 @@
-//! Spin glass lattice engine.
+//! Spin-glass-inspired lattice engine.
 //!
 //! Models a generalized Potts system on a triangular lattice over Z_q
 //! with toroidal boundary conditions. The triangular topology introduces
-//! geometric frustration — the foundation of spin glass hardness.
+//! geometric frustration. The synchronous update rule (neighbor mixing +
+//! cubing S-box) serves as the permutation for the sponge construction.
 //!
 //! Update rule (synchronous, per round):
 //! ```text
@@ -11,6 +12,7 @@
 //! ```
 
 use crate::params::Params;
+use core::hint::black_box;
 
 /// 6 neighbours per spin on the triangular lattice.
 /// Directions: [East, West, North, South, NorthEast, SouthWest]
@@ -51,6 +53,7 @@ fn splitmix64(state: &mut u64) -> u64 {
 }
 
 /// An n×n triangular lattice of spins over Z_q.
+#[derive(Clone)]
 pub struct SpinLattice {
     /// Side length of the square lattice.
     n: usize,
@@ -161,9 +164,11 @@ impl SpinLattice {
             let mixed = (h_eff + self.spins[i] as u64 + rc) % q;
 
             // Nonlinear S-box: cubing in Z_q (a permutation since gcd(3, q-1)=1)
-            let sq = mixed * mixed % q;
-            let cube = sq * mixed % q;
-            *out = cube as u16;
+            // black_box prevents the compiler from using the secret value for
+            // branch prediction or algebraic simplifications that could leak timing.
+            let sq = black_box(mixed) * black_box(mixed) % q;
+            let cube = black_box(sq) * black_box(mixed) % q;
+            *out = black_box(cube) as u16;
         }
 
         self.spins = new_spins;
@@ -193,11 +198,12 @@ impl SpinLattice {
             for (k, &(nr, nc)) in nbrs.iter().enumerate() {
                 let j = nr * n + nc;
                 if i < j {
-                    let contrib =
-                        self.couplings[i * NUM_NEIGHBORS + k] as u64 * self.spins[i] as u64 % q
-                            * self.spins[j] as u64
-                            % q;
-                    energy = energy.wrapping_sub(contrib as i64);
+                    let contrib = black_box(self.couplings[i * NUM_NEIGHBORS + k] as u64)
+                        * black_box(self.spins[i] as u64)
+                        % q
+                        * black_box(self.spins[j] as u64)
+                        % q;
+                    energy = energy.wrapping_sub(black_box(contrib) as i64);
                 }
             }
         }
