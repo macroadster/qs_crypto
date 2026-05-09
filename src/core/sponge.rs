@@ -7,6 +7,7 @@
 
 use crate::core::lattice::SpinLattice;
 use crate::params::Params;
+use zeroize::Zeroize;
 
 /// Bytes consumed per Z_q element during absorb/squeeze (little-endian u16).
 const BYTES_PER_ELEMENT: usize = 2;
@@ -22,6 +23,15 @@ pub struct SpinSponge {
     capacity: usize,
     /// Rounds per permutation invocation.
     rounds: usize,
+}
+
+impl Zeroize for SpinSponge {
+    fn zeroize(&mut self) {
+        self.lattice.zeroize();
+        self.rate = 0;
+        self.capacity = 0;
+        self.rounds = 0;
+    }
 }
 
 impl SpinSponge {

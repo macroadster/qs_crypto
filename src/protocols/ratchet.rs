@@ -13,10 +13,12 @@
 //! will cause decryption failures for all subsequent messages on
 //! that chain.
 
+use sha3::digest::{ExtendableOutput, Update};
+use sha3::Shake256;
+use std::io::Read;
 use zeroize::Zeroize;
 
 use crate::kem::types::{KeyPair, PublicKey};
-use crate::primitives::kdf::spin_kdf;
 
 /// Per-party ratchet state.
 ///
@@ -40,10 +42,28 @@ impl Drop for DoubleRatchet {
     }
 }
 
+/// Derive `len` bytes from (key, label) using SHAKE256.
+///
+/// Replaces `spin_kdf` for the symmetric ratchet so that forward secrecy
+/// does not depend on the unvetted SpinSponge permutation.
+fn shake_derive(key: &[u8; 32], label: &[u8], len: usize) -> Vec<u8> {
+    let mut hasher = Shake256::default();
+    hasher.update(key);
+    hasher.update(label);
+    let mut reader = hasher.finalize_xof();
+    let mut out = vec![0u8; len];
+    reader.read_exact(&mut out).expect("SHAKE256 read must not fail");
+    out
+}
+
 /// Advance a symmetric chain key and derive a per-message key.
+///
+/// Uses SHAKE256 (vetted) instead of SpinKDF so that the ratchet's
+/// forward secrecy properties hold regardless of SpinSponge strength.
 fn symmetric_ratchet(chain_key: &mut [u8; 32]) -> [u8; 32] {
-    let msg_key_vec = spin_kdf(chain_key, b"", b"qs-chain-msgkey", 32);
-    let new_ck_vec = spin_kdf(chain_key, b"", b"qs-chain-next", 32);
+    let msg_key_vec = shake_derive(chain_key, b"qs-chain-msgkey", 32);
+    let new_ck_vec = shake_derive(chain_key, b"qs-chain-next", 32);
+    chain_key.zeroize();
     chain_key.copy_from_slice(&new_ck_vec);
     let mut msg_key = [0u8; 32];
     msg_key.copy_from_slice(&msg_key_vec);
@@ -57,12 +77,12 @@ impl DoubleRatchet {
     /// lexicographically smaller is the *initiator* and gets chain-A
     /// for sending.
     pub fn init(session_key: &[u8; 32], my_keypair: KeyPair, peer_pk: PublicKey) -> Self {
-        let root_kdf = spin_kdf(session_key, b"", b"qs-ratchet-root", 32);
+        let root_kdf = shake_derive(session_key, b"qs-ratchet-root", 32);
         let mut root_key = [0u8; 32];
         root_key.copy_from_slice(&root_kdf);
 
-        let chain_a = spin_kdf(session_key, b"", b"qs-ratchet-chain-a", 32);
-        let chain_b = spin_kdf(session_key, b"", b"qs-ratchet-chain-b", 32);
+        let chain_a = shake_derive(session_key, b"qs-ratchet-chain-a", 32);
+        let chain_b = shake_derive(session_key, b"qs-ratchet-chain-b", 32);
 
         let initiator = my_keypair.public_key.as_bytes() < peer_pk.as_bytes();
 
@@ -108,12 +128,14 @@ impl DoubleRatchet {
 
         let result = encapsulate(&self.peer_pk);
 
-        let new_root = spin_kdf(
-            &self.root_key,
-            result.shared_secret.as_bytes(),
-            b"qs-ratchet-kem",
-            64,
-        );
+        // Derive new root + send chain key from root_key ‖ shared_secret
+        let mut hasher = Shake256::default();
+        hasher.update(&self.root_key);
+        hasher.update(result.shared_secret.as_bytes());
+        hasher.update(b"qs-ratchet-kem");
+        let mut reader = hasher.finalize_xof();
+        let mut new_root = vec![0u8; 64];
+        reader.read_exact(&mut new_root).expect("SHAKE256 read must not fail");
         self.root_key.copy_from_slice(&new_root[..32]);
         self.send_chain_key.copy_from_slice(&new_root[32..]);
 

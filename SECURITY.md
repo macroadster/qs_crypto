@@ -1,6 +1,6 @@
 # QS-Crypto Security Model & Hardening Status
 
-**Status (as of 2026):** Research-grade library with significant hardening applied. **Not recommended for production use without additional review and parameter validation.**
+**Status (as of 2026):** Research-grade library with comprehensive hardening across both asymmetric and symmetric layers. **Not recommended for production use without additional review and parameter validation.**
 
 ---
 
@@ -13,9 +13,21 @@
 
 This is the single most important change that makes the asymmetric layer "real."
 
+### 1b. Symmetric Layer Hardening — Hybrid AEAD + Vetted KDFs (v0.3)
+
+- **Before:** The AEAD, ratchet KDF, session nonce derivation, and PAKE session key derivation all depended exclusively on the unvetted SpinSponge permutation. A break of SpinLattice would have been catastrophic across the entire symmetric layer.
+- **After:**
+  - **AEAD:** Now uses a hybrid construction — key material is derived from *both* SpinSponge and SHAKE256 (XOR-combined), then bulk encryption uses **ChaCha20-Poly1305** (a vetted AEAD). Security = `max(SpinSponge, SHAKE256)` for key derivation × ChaCha20-Poly1305 for confidentiality/authenticity.
+  - **Ratchet KDF:** The symmetric ratchet (`symmetric_ratchet`, `DoubleRatchet::init`, `kem_ratchet_step`) now derives all chain keys and message keys from **SHAKE256** instead of `spin_kdf`. Forward secrecy no longer depends on the novel permutation.
+  - **Session nonce:** Nonce derivation in `Session::encrypt`/`Session::decrypt` now uses **SHAKE256** instead of `spin_hash`. Nonce uniqueness is guaranteed by a vetted hash, eliminating the risk of nonce collisions from a broken sponge.
+  - **PAKE:** Password key derivation and session key derivation in the PAKE protocol now use **SHAKE256** instead of `spin_kdf`/`spin_hash`.
+- **Result:** The symmetric layer now has the same posture as the KEM: even a total break of the SpinLattice permutation cannot recover plaintext, forge authentication tags, collapse forward secrecy, or produce nonce collisions.
+
 ### 2. Memory Safety & Secret Handling
 - All secret types (`PrivateKey`, `SharedSecret`, internal keys in ratchet) implement `Zeroize` + `ZeroizeOnDrop`.
-- Constant-time tag comparison via `subtle::ConstantTimeEq` in AEAD and FO rejection.
+- `SpinLattice` and `SpinSponge` now implement `Zeroize`, and the AEAD explicitly zeroizes the sponge and all derived subkeys after use.
+- The ratchet's `symmetric_ratchet` zeroizes the old chain key before overwriting.
+- Constant-time tag comparison via Poly1305 (ChaCha20-Poly1305 crate) in the AEAD and `subtle::ConstantTimeEq` in FO rejection.
 - No secret-dependent branches in the decapsulation rejection path (masking via `unwrap_u8().wrapping_neg()`).
 
 ### 3. Domain Separation
@@ -33,8 +45,8 @@ The `SpinLattice::step()` function (linear neighbor mixing + position-dependent 
 - The design document requires **NIST SP 800-22** and **TestU01 BigCrush** statistical validation before any trust. As of this version, only basic avalanche and determinism tests exist.
 - **Recommendation:** Treat `spin_*` functions as an interesting experimental symmetric primitive family. For high-value data, prefer a hybrid construction or layer a vetted AEAD (e.g., AES-GCM or ChaCha20-Poly1305 via another crate) on top of a Spin-derived key.
 
-### SpinAEAD Nonce-Misuse Sensitivity
-The `aead::encrypt` / `aead::decrypt` functions implement a duplex-sponge stream cipher (similar to Ketje/Keyak). This construction is **not nonce-misuse resistant**: reusing the same `(key, nonce)` pair for two different plaintexts reveals their XOR. The `Session` layer prevents this by deriving unique nonces from the ratchet counter, but direct callers of `aead::encrypt` must guarantee nonce uniqueness themselves.
+### AEAD Nonce-Misuse Sensitivity
+The `aead::encrypt` / `aead::decrypt` functions now use ChaCha20-Poly1305 internally. This construction is still **not nonce-misuse resistant**: reusing the same `(key, nonce)` pair for two different plaintexts remains dangerous. The `Session` layer prevents this by deriving unique nonces from SHAKE256(direction, msg_number) via the ratchet counter. Direct callers of `aead::encrypt` must guarantee nonce uniqueness themselves. A future SIV mode would provide defense-in-depth.
 
 ### Parameter Choices
 - `q = 3329`, CBD(η=2), lattice dimensions (144/196/256) are taken from Kyber-512/768/1024 analogs.
@@ -126,4 +138,4 @@ We welcome third-party cryptanalysis of the `SpinLattice` round function.
 
 ---
 
-**Last updated:** 2026 — after the SHAKE256 hardening pass and documentation alignment.
+**Last updated:** 2026 — after the symmetric layer hardening pass (hybrid AEAD, vetted KDFs, SHAKE256 nonces).

@@ -13,6 +13,7 @@
 
 use crate::params::Params;
 use core::hint::black_box;
+use zeroize::Zeroize;
 
 /// 6 neighbours per spin on the triangular lattice.
 /// Directions: [East, West, North, South, NorthEast, SouthWest]
@@ -64,6 +65,13 @@ pub struct SpinLattice {
     /// Coupling constants for each edge in the triangular lattice.
     /// Stored as adjacency list: for each spin i, its 6 neighbour couplings.
     couplings: Vec<u16>,
+}
+
+impl Zeroize for SpinLattice {
+    fn zeroize(&mut self) {
+        self.spins.zeroize();
+        self.couplings.zeroize();
+    }
 }
 
 impl SpinLattice {

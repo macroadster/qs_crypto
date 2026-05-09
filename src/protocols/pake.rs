@@ -19,14 +19,46 @@
 //!   3. Client decrypts envelope → `sk`, decapsulates ct → ss
 //!   4. Both derive `session_key = SpinHash(ss ‖ transcript)`
 
+use sha3::digest::{ExtendableOutput, Update};
+use sha3::Shake256;
+use std::io::Read;
 use zeroize::Zeroize;
 
 use crate::error::Error;
 use crate::kem::types::KeyPair;
 use crate::kem::{decapsulate, encapsulate};
 use crate::primitives::aead;
-use crate::primitives::hash::spin_hash;
-use crate::primitives::kdf::spin_kdf;
+
+/// Derive a 32-byte key from input material using SHAKE256.
+///
+/// Replaces `spin_kdf` in security-critical paths so that password key
+/// derivation and session key derivation do not depend on the unvetted
+/// SpinSponge permutation.
+fn shake_kdf(domain: &[u8], key: &[u8], salt: &[u8], info: &[u8], len: usize) -> Vec<u8> {
+    let mut hasher = Shake256::default();
+    hasher.update(domain);
+    hasher.update(&(key.len() as u64).to_le_bytes());
+    hasher.update(key);
+    hasher.update(&(salt.len() as u64).to_le_bytes());
+    hasher.update(salt);
+    hasher.update(info);
+    let mut reader = hasher.finalize_xof();
+    let mut out = vec![0u8; len];
+    reader.read_exact(&mut out).expect("SHAKE256 read must not fail");
+    out
+}
+
+/// Derive a 32-byte session key hash from transcript material using SHAKE256.
+fn shake_session_hash(domain_byte: u8, shared_secret: &[u8], transcript: &[u8]) -> [u8; 32] {
+    let mut hasher = Shake256::default();
+    hasher.update(&[domain_byte]);
+    hasher.update(shared_secret);
+    hasher.update(transcript);
+    let mut reader = hasher.finalize_xof();
+    let mut out = [0u8; 32];
+    reader.read_exact(&mut out).expect("SHAKE256 read must not fail");
+    out
+}
 
 /// Server-side registration record.
 ///
@@ -82,8 +114,8 @@ pub fn pake_register(password: &str, keypair: &KeyPair) -> RegistrationRecord {
     getrandom::getrandom(&mut salt).expect("OS RNG failed");
     getrandom::getrandom(&mut nonce).expect("OS RNG failed");
 
-    // Derive password key
-    let pwk_vec = spin_kdf(password.as_bytes(), &salt, b"qs-pake-envelope", 32);
+    // Derive password key via SHAKE256 (vetted)
+    let pwk_vec = shake_kdf(b"qs-pake-envelope", password.as_bytes(), &salt, b"", 32);
     let pwk: [u8; 32] = pwk_vec.try_into().unwrap();
 
     // Encrypt private key
@@ -149,8 +181,8 @@ impl PakeClient {
         off += 16;
         let kem_ct_bytes = read_len_prefixed(server_msg, &mut off)?;
 
-        // Recover private key
-        let pwk_vec = spin_kdf(self.password.as_bytes(), &salt, b"qs-pake-envelope", 32);
+        // Recover private key via SHAKE256 (vetted — must match registration)
+        let pwk_vec = shake_kdf(b"qs-pake-envelope", self.password.as_bytes(), &salt, b"", 32);
         let pwk: [u8; 32] = pwk_vec.try_into().unwrap();
         let sk_bytes = aead::decrypt(&pwk, &nonce, &pk_bytes, &envelope_ct, &tag)
             .map_err(|_| Error::Pake("wrong password or corrupted envelope".into()))?;
@@ -161,12 +193,8 @@ impl PakeClient {
         // Decapsulate to get shared secret
         let ss = decapsulate(&sk, &ct)?;
 
-        // Derive session key
-        let mut transcript = Vec::new();
-        transcript.push(0x20);
-        transcript.extend_from_slice(ss.as_bytes());
-        transcript.extend_from_slice(server_msg);
-        Ok(spin_hash(&transcript))
+        // Derive session key via SHAKE256 (vetted)
+        Ok(shake_session_hash(0x20, ss.as_bytes(), server_msg))
     }
 }
 
@@ -228,10 +256,6 @@ impl PakeServer {
             .as_ref()
             .ok_or_else(|| Error::Pake("respond() not called".into()))?;
 
-        let mut transcript = Vec::new();
-        transcript.push(0x20);
-        transcript.extend_from_slice(&ss);
-        transcript.extend_from_slice(resp);
-        Ok(spin_hash(&transcript))
+        Ok(shake_session_hash(0x20, &ss, resp))
     }
 }

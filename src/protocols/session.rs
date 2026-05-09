@@ -5,14 +5,31 @@
 //! uses a unique key derived from the ratchet; old keys are deleted
 //! immediately after use.
 
+use sha3::digest::{ExtendableOutput, Update};
+use sha3::Shake256;
+use std::io::Read;
 use zeroize::Zeroize;
 
 use crate::error::Error;
 use crate::kem::types::{KeyPair, PrivateKey, PublicKey};
 use crate::primitives::aead;
-use crate::primitives::hash::spin_hash;
 use crate::protocols::ratchet::DoubleRatchet;
 use crate::visual::fingerprint::{self, IdentityPhoto};
+
+/// Derive a 16-byte AEAD nonce from (direction, msg_number) using SHAKE256.
+///
+/// Previously used `spin_hash` (unvetted sponge). Switched to SHAKE256
+/// so that nonce uniqueness does not depend on the novel permutation.
+fn derive_nonce(direction: u8, msg_number: u64) -> [u8; 16] {
+    let mut hasher = Shake256::default();
+    hasher.update(b"qs-session-nonce");
+    hasher.update(&[direction]);
+    hasher.update(&msg_number.to_le_bytes());
+    let mut reader = hasher.finalize_xof();
+    let mut nonce = [0u8; 16];
+    reader.read_exact(&mut nonce).expect("SHAKE256 read must not fail");
+    nonce
+}
 
 fn write_len_prefixed(buf: &mut Vec<u8>, data: &[u8]) {
     buf.extend_from_slice(&(data.len() as u32).to_le_bytes());
@@ -79,12 +96,7 @@ impl Session {
         let direction = self.ratchet.my_direction();
         let msg_number = self.ratchet.send_count() - 1; // already incremented
 
-        // Derive nonce from direction + message number
-        let mut nonce_input = Vec::new();
-        nonce_input.push(direction);
-        nonce_input.extend_from_slice(&msg_number.to_le_bytes());
-        let nonce_hash = spin_hash(&nonce_input);
-        let nonce: [u8; 16] = nonce_hash[..16].try_into().unwrap();
+        let nonce = derive_nonce(direction, msg_number);
 
         // AAD = header bytes (direction + msg_number)
         let mut header = Vec::with_capacity(HEADER_LEN);
@@ -117,12 +129,7 @@ impl Session {
 
         let msg_key = self.ratchet.next_recv_key();
 
-        // Derive the same nonce
-        let mut nonce_input = Vec::new();
-        nonce_input.push(direction);
-        nonce_input.extend_from_slice(&msg_number.to_le_bytes());
-        let nonce_hash = spin_hash(&nonce_input);
-        let nonce: [u8; 16] = nonce_hash[..16].try_into().unwrap();
+        let nonce = derive_nonce(direction, msg_number);
 
         aead::decrypt(&msg_key, &nonce, header, ciphertext, &tag)
     }

@@ -4,15 +4,14 @@
 //! inspired by spin-glass lattice dynamics, paired with a hardened
 //! Ring-LWE Key Encapsulation Mechanism.
 //!
-//! **Key hardening (2026):** The KEM now derives all internal randomness
-//! (public polynomial expansion and noise sampling) from SHAKE256. Its
-//! IND-CCA2 security therefore reduces to standard Ring-LWE + SHAKE256,
-//! independent of the correctness of the custom permutation.
-//!
-//! The symmetric primitives (`spin_hash`, `SpinAEAD`, ratchet KDFs, etc.)
-//! and the unique visual fingerprinting layer still use the physics-inspired
-//! `SpinLattice` permutation — an interesting research direction that
-//! invites further cryptanalysis.
+//! **Key hardening (2026):** The KEM derives all internal randomness from
+//! SHAKE256 (IND-CCA2 reduces to Ring-LWE + SHAKE256). The AEAD uses a
+//! hybrid construction (SpinSponge ⊕ SHAKE256 → ChaCha20-Poly1305) so that
+//! confidentiality and authenticity hold even if the novel permutation is
+//! broken. The ratchet KDF and session nonce derivation use SHAKE256
+//! exclusively. The standalone symmetric primitives (`spin_hash`, `SpinPrng`,
+//! `spin_kdf`) and visual fingerprinting still use the `SpinLattice`
+//! permutation for research purposes.
 //!
 //! ## Architecture
 //!
