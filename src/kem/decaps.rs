@@ -21,18 +21,23 @@ pub fn decapsulate(sk: &PrivateKey, ct: &Ciphertext) -> crate::Result<SharedSecr
     let sk_bytes = sk.as_bytes();
     let ct_bytes = ct.as_bytes();
 
-    if sk_bytes[0] != ct_bytes[0] {
-        return Err(crate::Error::DecapsulationFailed);
-    }
-
+    // Use the sk's level byte unconditionally — no early return on mismatch.
+    // The level-byte mismatch is folded into the constant-time FO check below.
     let params = params_from_level_byte(sk_bytes[0]);
     let n = params.total_spins;
     let coin_len = params.coin_bytes();
 
+    // Validate minimum lengths to prevent panics (not secret-dependent).
+    let min_sk = 1 + n * 2 + 1 + 32 + n * 2;
+    let min_ct = 1 + n * 4;
+    if sk_bytes.len() < min_sk || ct_bytes.len() < min_ct {
+        return Err(crate::Error::DecapsulationFailed);
+    }
+
     // Parse secret key:  [level, s(2N), pk(1+32+2N)]
     let s = Poly::from_bytes(&sk_bytes[1..], n);
     let pk_bytes = &sk_bytes[1 + n * 2..];
-    let pk = PublicKey::from_bytes(pk_bytes).unwrap();
+    let pk = PublicKey::from_bytes(pk_bytes).map_err(|_| crate::Error::DecapsulationFailed)?;
 
     // Parse ciphertext: [level, c1(2N), c2(2N)]
     let c1 = Poly::from_bytes(&ct_bytes[1..], n);

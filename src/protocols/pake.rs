@@ -19,6 +19,8 @@
 //!   3. Client decrypts envelope → `sk`, decapsulates ct → ss
 //!   4. Both derive `session_key = SpinHash(ss ‖ transcript)`
 
+use zeroize::Zeroize;
+
 use crate::error::Error;
 use crate::kem::types::KeyPair;
 use crate::kem::{decapsulate, encapsulate};
@@ -107,6 +109,12 @@ pub struct PakeClient {
     password: String,
 }
 
+impl Drop for PakeClient {
+    fn drop(&mut self) {
+        self.password.zeroize();
+    }
+}
+
 impl PakeClient {
     pub fn new(password: &str) -> Self {
         Self {
@@ -169,6 +177,14 @@ pub struct PakeServer {
     record: RegistrationRecord,
     shared_secret: Option<[u8; 32]>,
     response_bytes: Option<Vec<u8>>,
+}
+
+impl Drop for PakeServer {
+    fn drop(&mut self) {
+        if let Some(ref mut ss) = self.shared_secret {
+            ss.zeroize();
+        }
+    }
 }
 
 impl PakeServer {

@@ -104,57 +104,98 @@ pub fn hybrid_encapsulate(pk: &HybridPublicKey) -> (HybridCiphertext, HybridShar
     // X25519 encapsulation (ephemeral)
     let eph_secret = XSecret::random_from_rng(OsRng);
     let eph_public = XPublic::from(&eph_secret);
-    let ss_x25519 = eph_secret.diffie_hellman(&XPublic::from(pk.x25519));
-
-    // Combine with SHAKE256
-    let mut hasher = Shake256::default();
-    hasher.update(ss_spin.as_bytes());
-    hasher.update(ss_x25519.as_bytes());
-    hasher.update(b"qs-hybrid-v1");
-
-    let mut combined = [0u8; 32];
-    let mut reader = hasher.finalize_xof();
-    reader.read_exact(&mut combined).expect("SHAKE read failed");
+    let peer_x25519 = XPublic::from(pk.x25519);
+    let ss_x25519 = eph_secret.diffie_hellman(&peer_x25519);
+    // Reject low-order / identity points that would yield an all-zero shared secret.
+    assert_ne!(
+        ss_x25519.as_bytes(),
+        &[0u8; 32],
+        "X25519 produced all-zero shared secret (low-order peer key)"
+    );
 
     let ct = HybridCiphertext {
         spin_ct: spin_result.ciphertext,
         x25519_ephemeral: eph_public.to_bytes(),
     };
 
+    // Combine with SHAKE256, binding all transcript material (NIST SP 800-56Cr2).
+    let combined = hybrid_combine(
+        ss_spin.as_bytes(),
+        ss_x25519.as_bytes(),
+        pk.spin.as_bytes(),
+        &pk.x25519,
+        ct.spin_ct.as_bytes(),
+        &ct.x25519_ephemeral,
+    );
+
     (ct, HybridSharedSecret::from_bytes(combined))
 }
 
 /// Decapsulate a hybrid ciphertext.
+///
+/// Both KEM legs always execute regardless of individual errors, so the
+/// X25519 component provides its security guarantee even when the Spin
+/// component fails. Errors are combined after both legs complete.
 pub fn hybrid_decapsulate(
     sk: &HybridPrivateKey,
     ct: &HybridCiphertext,
 ) -> crate::Result<HybridSharedSecret> {
-    // Spin decapsulation
-    let ss_spin = decapsulate(&sk.spin, &ct.spin_ct)?;
+    // Always run both legs — no short-circuit on Spin failure.
+    let spin_result = decapsulate(&sk.spin, &ct.spin_ct);
 
-    // X25519 decapsulation
+    // X25519 decapsulation (always runs)
     let eph_public = XPublic::from(ct.x25519_ephemeral);
     let ss_x25519 = sk.x25519.diffie_hellman(&eph_public);
 
-    // Same combiner
-    let mut hasher = Shake256::default();
-    hasher.update(ss_spin.as_bytes());
-    hasher.update(ss_x25519.as_bytes());
-    hasher.update(b"qs-hybrid-v1");
+    // Propagate Spin error only after X25519 has completed
+    let ss_spin = spin_result?;
 
-    let mut combined = [0u8; 32];
-    let mut reader = hasher.finalize_xof();
-    reader.read_exact(&mut combined).expect("SHAKE read failed");
+    // Same combiner, binding all transcript material.
+    let combined = hybrid_combine(
+        ss_spin.as_bytes(),
+        ss_x25519.as_bytes(),
+        sk.spin_public.as_bytes(),
+        &sk.x25519_public.to_bytes(),
+        ct.spin_ct.as_bytes(),
+        &ct.x25519_ephemeral,
+    );
 
     Ok(HybridSharedSecret::from_bytes(combined))
 }
 
+/// Hybrid combiner: SHAKE256 over both shared secrets + all public transcript
+/// material (public keys and ciphertexts), per NIST SP 800-56Cr2 guidance.
+fn hybrid_combine(
+    ss_spin: &[u8],
+    ss_x25519: &[u8],
+    pk_spin: &[u8],
+    pk_x25519: &[u8],
+    ct_spin: &[u8],
+    ct_x25519: &[u8],
+) -> [u8; 32] {
+    let mut hasher = Shake256::default();
+    hasher.update(ss_spin);
+    hasher.update(ss_x25519);
+    hasher.update(pk_spin);
+    hasher.update(pk_x25519);
+    hasher.update(ct_spin);
+    hasher.update(ct_x25519);
+    hasher.update(b"qs-hybrid-v2");
+
+    let mut combined = [0u8; 32];
+    let mut reader = hasher.finalize_xof();
+    reader.read_exact(&mut combined).expect("SHAKE read failed");
+    combined
+}
+
 // --- ML-KEM (Priority 2) Support ---
 
-/// Full 3-way Hybrid (Spin + X25519 + ML-KEM-768 strength) — **fully functional end-to-end** for v0.2.
+/// Extended hybrid KEM (Spin + X25519 + additional KDF hardening).
 ///
-/// The API is shaped so that real `ml-kem` crate calls can be dropped in later with almost no change.
-/// For v0.2 this gives a strong, consistent 3-leg shared secret.
+/// This is a 2-leg hybrid with an extra KDF pass for domain separation.
+/// It does **not** include a real ML-KEM leg — that requires integrating
+/// the `ml-kem` crate. The API is shaped so that a third KEM leg can be
+/// added later with minimal change.
 pub fn full_hybrid_generate_keypair(params: &Params) -> HybridKeyPair {
     hybrid_generate_keypair(params)
 }
@@ -162,11 +203,10 @@ pub fn full_hybrid_generate_keypair(params: &Params) -> HybridKeyPair {
 pub fn full_hybrid_encapsulate(pk: &HybridPublicKey) -> (HybridCiphertext, HybridSharedSecret) {
     let (base_ct, base_ss) = hybrid_encapsulate(pk);
 
-    // Third leg — ML-KEM-768 strength (real crate ready, one-line integration)
+    // Additional KDF pass for domain separation (placeholder for future ML-KEM leg)
     let mut hasher = Shake256::default();
     hasher.update(base_ss.as_bytes());
-    hasher.update(b"ml-kem-768-strength-leg-v0.2");
-    hasher.update(b"qs-full-hybrid-v2");
+    hasher.update(b"qs-extended-hybrid-v0.2");
 
     let mut final_ss = [0u8; 32];
     let mut reader = hasher.finalize_xof();
@@ -183,8 +223,7 @@ pub fn full_hybrid_decapsulate(
 
     let mut hasher = Shake256::default();
     hasher.update(base_ss.as_bytes());
-    hasher.update(b"ml-kem-768-strength-leg-v0.2");
-    hasher.update(b"qs-full-hybrid-v2");
+    hasher.update(b"qs-extended-hybrid-v0.2");
 
     let mut final_ss = [0u8; 32];
     let mut reader = hasher.finalize_xof();

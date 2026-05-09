@@ -148,20 +148,23 @@ impl SpinLattice {
             let (r, c) = (i / n, i % n);
             let nbrs = triangular_neighbors(r, c, n);
 
-            // Effective field: linear mixing with neighbours
+            // Effective field: linear mixing with neighbours.
+            // black_box on each accumulation step prevents the compiler from
+            // reordering or vectorizing in ways that could leak secret spin values.
             let mut h_eff: u64 = 0;
             for (k, &(nr, nc)) in nbrs.iter().enumerate() {
                 let j = nr * n + nc;
-                h_eff = (h_eff
-                    + self.couplings[i * NUM_NEIGHBORS + k] as u64 * self.spins[j] as u64)
-                    % q;
+                h_eff = black_box(
+                    (h_eff + self.couplings[i * NUM_NEIGHBORS + k] as u64 * self.spins[j] as u64)
+                        % q,
+                );
             }
 
             // Position-dependent round constant (breaks spatial symmetry)
             let rc = (i as u64).wrapping_mul(2654435761) % q;
 
             // Mix current spin + effective field + round constant
-            let mixed = (h_eff + self.spins[i] as u64 + rc) % q;
+            let mixed = black_box((h_eff + self.spins[i] as u64 + rc) % q);
 
             // Nonlinear S-box: cubing in Z_q (a permutation since gcd(3, q-1)=1)
             // black_box prevents the compiler from using the secret value for

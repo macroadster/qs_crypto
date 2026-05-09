@@ -33,6 +33,9 @@ The `SpinLattice::step()` function (linear neighbor mixing + position-dependent 
 - The design document requires **NIST SP 800-22** and **TestU01 BigCrush** statistical validation before any trust. As of this version, only basic avalanche and determinism tests exist.
 - **Recommendation:** Treat `spin_*` functions as an interesting experimental symmetric primitive family. For high-value data, prefer a hybrid construction or layer a vetted AEAD (e.g., AES-GCM or ChaCha20-Poly1305 via another crate) on top of a Spin-derived key.
 
+### SpinAEAD Nonce-Misuse Sensitivity
+The `aead::encrypt` / `aead::decrypt` functions implement a duplex-sponge stream cipher (similar to Ketje/Keyak). This construction is **not nonce-misuse resistant**: reusing the same `(key, nonce)` pair for two different plaintexts reveals their XOR. The `Session` layer prevents this by deriving unique nonces from the ratchet counter, but direct callers of `aead::encrypt` must guarantee nonce uniqueness themselves.
+
 ### Parameter Choices
 - `q = 3329`, CBD(η=2), lattice dimensions (144/196/256) are taken from Kyber-512/768/1024 analogs.
 - No dedicated concrete security analysis or lattice reduction experiments have been performed on the exact parameter sets.
@@ -47,13 +50,15 @@ The `SpinLattice::step()` function (linear neighbor mixing + position-dependent 
 
 **What we have *not* done (and do not claim):**
 - Formal verification with `ctgrind`, `dudect`, `valgrind`, or similar tools.
-- Constant-time polynomial arithmetic beyond basic `black_box` hints (schoolbook multiplication has data-dependent memory access patterns in theory, although modern CPUs usually execute `u16`/`i64` ops in constant time).
+- Constant-time polynomial arithmetic beyond basic `black_box` hints. All NTT butterfly and schoolbook multiply operations now have `black_box` barriers on secret coefficient reads, but modular reduction still uses `rem_euclid` (hardware integer division), which may be variable-time on some microarchitectures depending on operand magnitude. Migrating to Barrett or Montgomery reduction would eliminate this residual risk.
 - The `SpinLattice::step()` function performs array indexing based on precomputed neighbor tables and multiplications involving secret spin values. While we believe these are constant-time on contemporary x86_64 and aarch64, this has **not** been rigorously proven.
 - No masking or higher-order countermeasures.
 
 **Recommendation:** Treat the current implementation as having *basic* constant-time hygiene suitable for research and low-to-medium risk experimental deployments. For anything security-critical against a sophisticated local attacker, perform a dedicated side-channel audit or add hardware-level protections.
 
-**Future work:** Full CT audit, `#[inline(never)]` + more aggressive `black_box` usage, and optional constant-time NTT implementation.
+**Status (v0.2.1 hardening pass):** `black_box` barriers have been added to all NTT butterfly operations, the SpinLattice linear mixing accumulator, and the schoolbook multiplier. FO implicit rejection no longer has an early-return timing leak. Secret types (`DoubleRatchet`, `Session`, `PakeClient`, `PakeServer`) now zeroize keys on drop. Input validation prevents panics from malformed keys/ciphertexts.
+
+**Future work:** Full CT audit with `dudect`/`ctgrind`, Barrett/Montgomery reduction to replace `rem_euclid`, `#[inline(never)]` on hot paths, and optional constant-time NTT implementation.
 
 ### Empirical Validation Results — SpinLattice Round Function
 

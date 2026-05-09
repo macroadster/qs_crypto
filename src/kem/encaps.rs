@@ -5,6 +5,8 @@
 //! - All blinding factors (r, e1, e2) are derived deterministically from `m`
 //!   using SHAKE256 (vetted XOF). This keeps the CCA security reduction clean.
 
+use zeroize::Zeroize;
+
 use super::ring::{encode_message, hash_pk, params_from_level_byte, poly_add, poly_mul, Poly};
 use super::types::{Ciphertext, EncapsulationResult, PublicKey, SharedSecret};
 use super::xof::{derive_fo_materials, expand_a_shake};
@@ -70,6 +72,9 @@ pub fn encapsulate(pk: &PublicKey) -> EncapsulationResult {
     getrandom::getrandom(&mut coin).expect("OS RNG failed");
 
     let (ciphertext, ss_bytes) = encaps_inner(pk, &coin);
+
+    // Zeroize the FO coin — it is the secret that protects IND-CCA2.
+    coin.zeroize();
 
     EncapsulationResult {
         ciphertext,

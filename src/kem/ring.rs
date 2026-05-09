@@ -41,10 +41,22 @@ impl Poly {
     }
 
     /// Deserialize from bytes.
+    ///
+    /// # Panics
+    /// Panics if `data.len() < n * 2`.
     pub fn from_bytes(data: &[u8], n: usize) -> Self {
+        assert!(
+            data.len() >= n * 2,
+            "Poly::from_bytes: data too short ({} < {})",
+            data.len(),
+            n * 2
+        );
+        let q = FIELD_MODULUS;
         let mut coeffs = Vec::with_capacity(n);
         for chunk in data[..n * 2].chunks(2) {
-            coeffs.push(u16::from_le_bytes([chunk[0], chunk[1]]));
+            let c = u16::from_le_bytes([chunk[0], chunk[1]]);
+            // Reduce coefficients into [0, q) to prevent arithmetic issues
+            coeffs.push(c % q);
         }
         Self { coeffs, n }
     }
@@ -231,6 +243,10 @@ pub fn hash_pk(pk_bytes: &[u8]) -> [u8; 32] {
 
 /// Infer [`Params`] from a security-level byte stored at the start of
 /// a serialized key/ciphertext.
+///
+/// # Panics
+/// Panics on an unrecognised level byte. Callers that handle untrusted
+/// input should validate the byte before calling this function.
 pub fn params_from_level_byte(b: u8) -> Params {
     let level = SecurityLevel::from_byte(b).expect("invalid security level byte");
     Params::from_security_level(level)

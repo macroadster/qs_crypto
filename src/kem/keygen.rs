@@ -6,6 +6,8 @@
 //! the novel SpinSponge construction (which remains available for symmetric
 //! primitives and the visual layer).
 
+use zeroize::Zeroize;
+
 use super::ring::{poly_add, poly_mul};
 use super::types::{KeyPair, PrivateKey, PublicKey};
 use super::xof::{expand_a_shake, sample_cbd_shake};
@@ -46,6 +48,9 @@ pub fn generate_keypair(params: &Params) -> KeyPair {
 
     let s = sample_cbd_shake(&s_label, eta, n);
     let e = sample_cbd_shake(&e_label, eta, n);
+
+    // Zeroize the OS seed — it derives the secret key material.
+    os_seed.zeroize();
 
     // b = a·s + e  (mod X^N+1, mod q)
     let b = poly_add(&poly_mul(&a, &s), &e);

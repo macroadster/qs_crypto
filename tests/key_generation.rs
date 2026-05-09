@@ -35,7 +35,9 @@ fn params_qs192_dimensions() {
 
 #[test]
 fn public_key_roundtrip_from_bytes() {
-    let raw = vec![1u8, 2, 3, 4, 5];
+    // QS128 (0x01): pk = 1 + 32 + 2*144 = 321 bytes
+    let mut raw = vec![0u8; 321];
+    raw[0] = 0x01;
     let pk = PublicKey::from_bytes(&raw).unwrap();
     assert_eq!(pk.as_bytes(), &raw[..]);
     assert_eq!(pk.to_bytes(), raw);
@@ -43,7 +45,11 @@ fn public_key_roundtrip_from_bytes() {
 
 #[test]
 fn private_key_roundtrip_from_bytes() {
-    let raw = vec![10u8, 20, 30];
+    // QS128 (0x01): sk = 1 + 2*144 + (1+32+2*144) = 610 bytes
+    let mut raw = vec![0u8; 610];
+    raw[0] = 0x01;
+    // Embedded pk also needs a valid level byte
+    raw[1 + 2 * 144] = 0x01;
     let sk = PrivateKey::from_bytes(&raw).unwrap();
     assert_eq!(sk.as_bytes(), &raw[..]);
     assert_eq!(sk.to_bytes(), raw);

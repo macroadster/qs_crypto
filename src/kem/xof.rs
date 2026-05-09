@@ -33,8 +33,9 @@ impl ShakePrng {
     /// Squeeze the next `len` bytes.
     pub fn next_bytes(&mut self, len: usize) -> Vec<u8> {
         let mut out = vec![0u8; len];
-        // Use std::io::Read (implemented by Shake256Reader)
-        let _ = Read::read(&mut self.reader, &mut out);
+        self.reader
+            .read_exact(&mut out)
+            .expect("SHAKE256 XOF read must not fail");
         out
     }
 }

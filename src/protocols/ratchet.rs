@@ -13,6 +13,8 @@
 //! will cause decryption failures for all subsequent messages on
 //! that chain.
 
+use zeroize::Zeroize;
+
 use crate::kem::types::{KeyPair, PublicKey};
 use crate::primitives::kdf::spin_kdf;
 
@@ -28,6 +30,14 @@ pub struct DoubleRatchet {
     peer_pk: PublicKey,
     send_count: u64,
     recv_count: u64,
+}
+
+impl Drop for DoubleRatchet {
+    fn drop(&mut self) {
+        self.root_key.zeroize();
+        self.send_chain_key.zeroize();
+        self.recv_chain_key.zeroize();
+    }
 }
 
 /// Advance a symmetric chain key and derive a per-message key.

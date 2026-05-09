@@ -3,6 +3,7 @@
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::error::Error;
+use crate::params::SecurityLevel;
 
 // ── Keys ───────────────────────────────────────────────────────────
 
@@ -13,9 +14,21 @@ pub struct PublicKey {
 }
 
 impl PublicKey {
+    /// Minimum public key length: `1 (level) + 32 (seed) + 2*N (poly b)`.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
         if bytes.is_empty() {
             return Err(Error::Deserialization("empty public key".into()));
+        }
+        let level = SecurityLevel::from_byte(bytes[0])
+            .ok_or_else(|| Error::Deserialization("invalid security level byte".into()))?;
+        let n = crate::params::Params::from_security_level(level).total_spins;
+        let expected = 1 + 32 + n * 2;
+        if bytes.len() < expected {
+            return Err(Error::Deserialization(format!(
+                "public key too short: {} < {}",
+                bytes.len(),
+                expected
+            )));
         }
         Ok(Self {
             data: bytes.to_vec(),
@@ -41,9 +54,22 @@ pub struct PrivateKey {
 }
 
 impl PrivateKey {
+    /// Minimum private key length: `1 (level) + 2*N (poly s) + pk_len`.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
         if bytes.is_empty() {
             return Err(Error::Deserialization("empty private key".into()));
+        }
+        let level = SecurityLevel::from_byte(bytes[0])
+            .ok_or_else(|| Error::Deserialization("invalid security level byte".into()))?;
+        let n = crate::params::Params::from_security_level(level).total_spins;
+        let pk_len = 1 + 32 + n * 2;
+        let expected = 1 + n * 2 + pk_len;
+        if bytes.len() < expected {
+            return Err(Error::Deserialization(format!(
+                "private key too short: {} < {}",
+                bytes.len(),
+                expected
+            )));
         }
         Ok(Self {
             data: bytes.to_vec(),
@@ -83,9 +109,21 @@ pub struct Ciphertext {
 }
 
 impl Ciphertext {
+    /// Minimum ciphertext length: `1 (level) + 4*N (c1 + c2)`.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
         if bytes.is_empty() {
             return Err(Error::Deserialization("empty ciphertext".into()));
+        }
+        let level = SecurityLevel::from_byte(bytes[0])
+            .ok_or_else(|| Error::Deserialization("invalid security level byte".into()))?;
+        let n = crate::params::Params::from_security_level(level).total_spins;
+        let expected = 1 + n * 4;
+        if bytes.len() < expected {
+            return Err(Error::Deserialization(format!(
+                "ciphertext too short: {} < {}",
+                bytes.len(),
+                expected
+            )));
         }
         Ok(Self {
             data: bytes.to_vec(),
@@ -119,7 +157,8 @@ impl SharedSecret {
 
 impl PartialEq for SharedSecret {
     fn eq(&self, other: &Self) -> bool {
-        self.0 == other.0
+        use subtle::ConstantTimeEq;
+        self.0.ct_eq(&other.0).into()
     }
 }
 impl Eq for SharedSecret {}

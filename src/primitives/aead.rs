@@ -51,6 +51,16 @@ fn init_sponge(key: &[u8; 32], nonce: &[u8; 16], aad: &[u8]) -> SpinSponge {
 
 /// Encrypt `plaintext` with associated data using the spin-glass sponge
 /// in duplex mode.
+///
+/// **WARNING — nonce reuse:** This is a standard duplex-sponge stream cipher.
+/// Reusing the same `(key, nonce)` pair for two different plaintexts reveals
+/// the XOR of the two plaintexts. Callers must guarantee nonce uniqueness.
+/// The [`Session`](crate::protocols::session::Session) layer handles this
+/// automatically via the ratchet counter.
+///
+/// **Experimental primitive:** The AEAD's security depends entirely on the
+/// unvetted `SpinSponge` permutation. For high-value data, layer a vetted
+/// AEAD (e.g., AES-GCM or ChaCha20-Poly1305) on top of a Spin-derived key.
 pub fn encrypt(key: &[u8; 32], nonce: &[u8; 16], aad: &[u8], plaintext: &[u8]) -> AeadCiphertext {
     let mut sponge = init_sponge(key, nonce, aad);
 

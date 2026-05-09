@@ -11,7 +11,9 @@ use qs_crypto::{
 
 #[test]
 fn ciphertext_roundtrip_from_bytes() {
-    let raw = vec![0xAA; 64];
+    // QS128 (level byte 0x01) needs 1 + 4*144 = 577 bytes minimum
+    let mut raw = vec![0x00; 577];
+    raw[0] = 0x01; // valid QS128 level byte
     let ct = Ciphertext::from_bytes(&raw).unwrap();
     assert_eq!(ct.as_bytes(), &raw[..]);
     assert_eq!(ct.to_bytes(), raw);

@@ -10,6 +10,8 @@
 //! Z_3329 supports at most a 256th root of unity (ord(Z*) = 3328 = 2⁸·13),
 //! so the NTT decomposes into 128 degree-2 factors, not 256 linear factors.
 
+use core::hint::black_box;
+
 const Q: i32 = 3329;
 pub const N: usize = 256;
 
@@ -37,8 +39,8 @@ pub fn ntt(r: &mut [i32; N]) {
             let zeta = ZETAS[k] as i64;
             k += 1;
             for j in start..start + len {
-                let t = (zeta * r[j + len] as i64).rem_euclid(Q as i64) as i32;
-                let r_j = r[j];
+                let t = (zeta * black_box(r[j + len]) as i64).rem_euclid(Q as i64) as i32;
+                let r_j = black_box(r[j]);
                 r[j] = ((r_j as i64 + t as i64).rem_euclid(Q as i64)) as i32;
                 r[j + len] = ((r_j as i64 - t as i64).rem_euclid(Q as i64)) as i32;
             }
@@ -55,8 +57,8 @@ pub fn inv_ntt(r: &mut [i32; N]) {
             let zeta = ZETAS[k] as i64;
             k -= 1;
             for j in start..start + len {
-                let r_j = r[j] as i64;
-                let r_jl = r[j + len] as i64;
+                let r_j = black_box(r[j]) as i64;
+                let r_jl = black_box(r[j + len]) as i64;
                 r[j] = ((r_j + r_jl).rem_euclid(Q as i64)) as i32;
                 r[j + len] = ((zeta * (r_jl - r_j)).rem_euclid(Q as i64)) as i32;
             }
@@ -65,7 +67,7 @@ pub fn inv_ntt(r: &mut [i32; N]) {
     // Scale by N/2⁻¹ = 128⁻¹ mod Q = 3303
     let f = 3303i64;
     for x in r.iter_mut() {
-        *x = ((*x as i64 * f).rem_euclid(Q as i64)) as i32;
+        *x = ((black_box(*x) as i64 * f).rem_euclid(Q as i64)) as i32;
     }
 }
 

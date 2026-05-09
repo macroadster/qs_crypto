@@ -5,6 +5,8 @@
 //! uses a unique key derived from the ratchet; old keys are deleted
 //! immediately after use.
 
+use zeroize::Zeroize;
+
 use crate::error::Error;
 use crate::kem::types::{KeyPair, PrivateKey, PublicKey};
 use crate::primitives::aead;
@@ -45,6 +47,12 @@ pub struct Session {
     session_key: [u8; 32],
     my_photo: Option<IdentityPhoto>,
     peer_photo: Option<IdentityPhoto>,
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        self.session_key.zeroize();
+    }
 }
 
 impl Session {
