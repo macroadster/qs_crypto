@@ -137,8 +137,10 @@ pub use primitives::prng::SpinPrng;
 // Layer 2
 pub use kem::hybrid;
 pub use kem::hybrid::{
-    hybrid_decapsulate, hybrid_encapsulate, hybrid_generate_keypair, HybridCiphertext,
-    HybridKeyPair, HybridPrivateKey, HybridPublicKey, HybridSharedSecret,
+    full_hybrid_decapsulate, full_hybrid_encapsulate, full_hybrid_generate_keypair,
+    hybrid_decapsulate, hybrid_encapsulate, hybrid_generate_keypair, FullHybridCiphertext,
+    FullHybridKeyPair, FullHybridPrivateKey, FullHybridPublicKey, HybridCiphertext, HybridKeyPair,
+    HybridPrivateKey, HybridPublicKey, HybridSharedSecret,
 };
 pub use kem::types::{
     Ciphertext, EncapsulationResult, KeyPair, PrivateKey, PublicKey, SharedSecret,

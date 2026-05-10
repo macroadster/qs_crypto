@@ -570,7 +570,8 @@ fn run_differential_cryptanalysis(trials: usize, max_weight: usize) {
     // meaning max_dp ≈ 1/trials (all outcomes distinct).
     report_lines.push("## Analysis\n".to_string());
     report_lines.push("For a secure permutation, we expect:".to_string());
-    report_lines.push("- Output differential weight concentrates near N/2 at full rounds".to_string());
+    report_lines
+        .push("- Output differential weight concentrates near N/2 at full rounds".to_string());
     report_lines.push("- DP decreases exponentially with round count".to_string());
     report_lines.push(format!(
         "- At {} rounds, near-perfect avalanche (fraction ≈ 1.0) indicates\n  the maximum differential probability per position is negligible",

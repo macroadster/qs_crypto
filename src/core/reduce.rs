@@ -85,8 +85,17 @@ mod tests {
     fn unsigned_matches_mod() {
         // Spot-check across the full u64 range
         let cases: Vec<u64> = vec![
-            0, 1, 3328, 3329, 3330, 10_000, 3328 * 3328,
-            u32::MAX as u64, u64::MAX, u64::MAX - 1, u64::MAX / 2,
+            0,
+            1,
+            3328,
+            3329,
+            3330,
+            10_000,
+            3328 * 3328,
+            u32::MAX as u64,
+            u64::MAX,
+            u64::MAX - 1,
+            u64::MAX / 2,
             0xDEAD_BEEF_CAFE_BABE,
         ];
         for a in cases {

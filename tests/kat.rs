@@ -109,11 +109,7 @@ fn kat_spin_kdf() {
         let salt = from_hex(&v.salt_hex);
         let actual = qs_crypto::spin_kdf(&key, &salt, v.info_ascii.as_bytes(), v.length);
         let expected = from_hex(&v.output_hex);
-        assert_eq!(
-            actual, expected,
-            "spin_kdf mismatch: {}",
-            v.description
-        );
+        assert_eq!(actual, expected, "spin_kdf mismatch: {}", v.description);
     }
 }
 
@@ -142,9 +138,8 @@ fn kat_aead() {
         );
 
         // Verify decryption roundtrip
-        let decrypted =
-            qs_crypto::aead::decrypt(&key, &nonce, &aad, &expected_ct, &expected_tag)
-                .expect("aead decrypt must succeed for KAT vector");
+        let decrypted = qs_crypto::aead::decrypt(&key, &nonce, &aad, &expected_ct, &expected_tag)
+            .expect("aead decrypt must succeed for KAT vector");
         assert_eq!(
             decrypted, plaintext,
             "aead decrypt mismatch: {}",
@@ -164,11 +159,7 @@ fn kat_sponge() {
         let mut sponge = qs_crypto::SpinSponge::new(&params);
         sponge.absorb(&input);
         let actual = sponge.squeeze_raw(v.squeeze_len);
-        assert_eq!(
-            actual, expected,
-            "sponge mismatch: {}",
-            v.description
-        );
+        assert_eq!(actual, expected, "sponge mismatch: {}", v.description);
     }
 }
 
@@ -185,8 +176,7 @@ fn kat_kem_decaps() {
         let ct = qs_crypto::kem::types::Ciphertext::from_bytes(&ct_bytes)
             .expect("invalid CT in KAT vector");
 
-        let ss = qs_crypto::decapsulate(&sk, &ct)
-            .expect("decaps must succeed for KAT vector");
+        let ss = qs_crypto::decapsulate(&sk, &ct).expect("decaps must succeed for KAT vector");
         assert_eq!(
             ss.as_bytes().as_slice(),
             expected_ss.as_slice(),

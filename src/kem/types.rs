@@ -21,7 +21,7 @@ impl PublicKey {
         }
         let level = SecurityLevel::from_byte(bytes[0])
             .ok_or_else(|| Error::Deserialization("invalid security level byte".into()))?;
-        let n = crate::params::Params::from_security_level(level).total_spins;
+        let n = crate::params::Params::from_security_level(level).ring_dim;
         let expected = 1 + 32 + n * 2;
         if bytes.len() < expected {
             return Err(Error::Deserialization(format!(
@@ -61,7 +61,7 @@ impl PrivateKey {
         }
         let level = SecurityLevel::from_byte(bytes[0])
             .ok_or_else(|| Error::Deserialization("invalid security level byte".into()))?;
-        let n = crate::params::Params::from_security_level(level).total_spins;
+        let n = crate::params::Params::from_security_level(level).ring_dim;
         let pk_len = 1 + 32 + n * 2;
         let expected = 1 + n * 2 + pk_len;
         if bytes.len() < expected {
@@ -116,7 +116,7 @@ impl Ciphertext {
         }
         let level = SecurityLevel::from_byte(bytes[0])
             .ok_or_else(|| Error::Deserialization("invalid security level byte".into()))?;
-        let n = crate::params::Params::from_security_level(level).total_spins;
+        let n = crate::params::Params::from_security_level(level).ring_dim;
         let expected = 1 + n * 4;
         if bytes.len() < expected {
             return Err(Error::Deserialization(format!(

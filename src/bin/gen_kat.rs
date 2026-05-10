@@ -101,10 +101,7 @@ fn generate_hash_vectors() -> Vec<HashVector> {
         ("empty input", vec![]),
         ("single byte 0x00", vec![0x00]),
         ("ASCII 'abc'", b"abc".to_vec()),
-        (
-            "256 bytes (0x00..0xff)",
-            (0..=255u8).collect(),
-        ),
+        ("256 bytes (0x00..0xff)", (0..=255u8).collect()),
         (
             "1024 bytes (repeating pattern)",
             (0..1024).map(|i| (i % 256) as u8).collect(),
@@ -131,11 +128,41 @@ fn generate_hash_vectors() -> Vec<HashVector> {
 fn generate_kdf_vectors() -> Vec<KdfVector> {
     println!("  spin_kdf vectors...");
     let cases: Vec<(&str, Vec<u8>, Vec<u8>, &str, usize)> = vec![
-        ("minimal key, empty salt/info, 32 bytes", vec![0x42; 32], vec![], "", 32),
-        ("32-byte key, 16-byte salt, info='test', 32 bytes", vec![0x01; 32], vec![0x02; 16], "test", 32),
-        ("key=0xff*32, salt=0xaa*32, info='expand', 64 bytes", vec![0xff; 32], vec![0xaa; 32], "expand", 64),
-        ("short key, long info, 48 bytes", vec![0x10; 16], vec![0x20; 8], "a]longer-info-string-for-kdf-testing", 48),
-        ("all-zero key/salt, info='zero', 128 bytes", vec![0x00; 32], vec![0x00; 32], "zero", 128),
+        (
+            "minimal key, empty salt/info, 32 bytes",
+            vec![0x42; 32],
+            vec![],
+            "",
+            32,
+        ),
+        (
+            "32-byte key, 16-byte salt, info='test', 32 bytes",
+            vec![0x01; 32],
+            vec![0x02; 16],
+            "test",
+            32,
+        ),
+        (
+            "key=0xff*32, salt=0xaa*32, info='expand', 64 bytes",
+            vec![0xff; 32],
+            vec![0xaa; 32],
+            "expand",
+            64,
+        ),
+        (
+            "short key, long info, 48 bytes",
+            vec![0x10; 16],
+            vec![0x20; 8],
+            "a]longer-info-string-for-kdf-testing",
+            48,
+        ),
+        (
+            "all-zero key/salt, info='zero', 128 bytes",
+            vec![0x00; 32],
+            vec![0x00; 32],
+            "zero",
+            128,
+        ),
     ];
 
     cases
@@ -218,16 +245,8 @@ fn generate_sponge_vectors() -> Vec<SpongeVector> {
     let cases: Vec<(&str, Vec<u8>, usize)> = vec![
         ("empty absorb, squeeze 32", vec![], 32),
         ("absorb 'abc', squeeze 32", b"abc".to_vec(), 32),
-        (
-            "absorb 64 bytes, squeeze 64",
-            (0..64).collect(),
-            64,
-        ),
-        (
-            "absorb 256 bytes, squeeze 32",
-            (0..=255u8).collect(),
-            32,
-        ),
+        ("absorb 64 bytes, squeeze 64", (0..64).collect(), 64),
+        ("absorb 256 bytes, squeeze 32", (0..=255u8).collect(), 32),
     ];
 
     cases

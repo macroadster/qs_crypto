@@ -44,7 +44,9 @@ fn shake_kdf(domain: &[u8], key: &[u8], salt: &[u8], info: &[u8], len: usize) ->
     hasher.update(info);
     let mut reader = hasher.finalize_xof();
     let mut out = vec![0u8; len];
-    reader.read_exact(&mut out).expect("SHAKE256 read must not fail");
+    reader
+        .read_exact(&mut out)
+        .expect("SHAKE256 read must not fail");
     out
 }
 
@@ -56,7 +58,9 @@ fn shake_session_hash(domain_byte: u8, shared_secret: &[u8], transcript: &[u8]) 
     hasher.update(transcript);
     let mut reader = hasher.finalize_xof();
     let mut out = [0u8; 32];
-    reader.read_exact(&mut out).expect("SHAKE256 read must not fail");
+    reader
+        .read_exact(&mut out)
+        .expect("SHAKE256 read must not fail");
     out
 }
 
@@ -182,7 +186,13 @@ impl PakeClient {
         let kem_ct_bytes = read_len_prefixed(server_msg, &mut off)?;
 
         // Recover private key via SHAKE256 (vetted — must match registration)
-        let pwk_vec = shake_kdf(b"qs-pake-envelope", self.password.as_bytes(), &salt, b"", 32);
+        let pwk_vec = shake_kdf(
+            b"qs-pake-envelope",
+            self.password.as_bytes(),
+            &salt,
+            b"",
+            32,
+        );
         let pwk: [u8; 32] = pwk_vec.try_into().unwrap();
         let sk_bytes = aead::decrypt(&pwk, &nonce, &pk_bytes, &envelope_ct, &tag)
             .map_err(|_| Error::Pake("wrong password or corrupted envelope".into()))?;

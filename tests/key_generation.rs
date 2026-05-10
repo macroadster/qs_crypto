@@ -18,6 +18,7 @@ fn params_qs128_dimensions() {
     let params = Params::from_security_level(SecurityLevel::QS128);
     assert_eq!(params.lattice_side, 12);
     assert_eq!(params.total_spins, 144);
+    assert_eq!(params.ring_dim, 128);
     assert_eq!(params.sponge_rate, 48);
     assert_eq!(params.sponge_capacity, 96);
 }
@@ -27,6 +28,7 @@ fn params_qs192_dimensions() {
     let params = Params::from_security_level(SecurityLevel::QS192);
     assert_eq!(params.lattice_side, 14);
     assert_eq!(params.total_spins, 196);
+    assert_eq!(params.ring_dim, 256);
     assert_eq!(params.sponge_rate, 64);
     assert_eq!(params.sponge_capacity, 132);
 }
@@ -35,8 +37,8 @@ fn params_qs192_dimensions() {
 
 #[test]
 fn public_key_roundtrip_from_bytes() {
-    // QS128 (0x01): pk = 1 + 32 + 2*144 = 321 bytes
-    let mut raw = vec![0u8; 321];
+    // QS128 (0x01): pk = 1 + 32 + 2*ring_dim(128) = 289 bytes
+    let mut raw = vec![0u8; 289];
     raw[0] = 0x01;
     let pk = PublicKey::from_bytes(&raw).unwrap();
     assert_eq!(pk.as_bytes(), &raw[..]);
@@ -45,11 +47,11 @@ fn public_key_roundtrip_from_bytes() {
 
 #[test]
 fn private_key_roundtrip_from_bytes() {
-    // QS128 (0x01): sk = 1 + 2*144 + (1+32+2*144) = 610 bytes
-    let mut raw = vec![0u8; 610];
+    // QS128 (0x01): sk = 1 + 2*ring_dim(128) + (1+32+2*ring_dim(128)) = 546 bytes
+    let mut raw = vec![0u8; 546];
     raw[0] = 0x01;
     // Embedded pk also needs a valid level byte
-    raw[1 + 2 * 144] = 0x01;
+    raw[1 + 2 * 128] = 0x01;
     let sk = PrivateKey::from_bytes(&raw).unwrap();
     assert_eq!(sk.as_bytes(), &raw[..]);
     assert_eq!(sk.to_bytes(), raw);
@@ -177,8 +179,11 @@ fn key_sizes_increase_with_security_level() {
         kp128.public_key.as_bytes().len() < kp192.public_key.as_bytes().len(),
         "QS-192 pk must be larger than QS-128"
     );
-    assert!(
-        kp192.public_key.as_bytes().len() < kp256.public_key.as_bytes().len(),
-        "QS-256 pk must be larger than QS-192"
+    // QS-192 and QS-256 share ring_dim=256, so key sizes are equal.
+    // They differ in lattice/sponge parameters, not polynomial dimension.
+    assert_eq!(
+        kp192.public_key.as_bytes().len(),
+        kp256.public_key.as_bytes().len(),
+        "QS-192 and QS-256 share ring_dim=256"
     );
 }

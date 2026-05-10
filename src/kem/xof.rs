@@ -45,7 +45,7 @@ impl ShakePrng {
 /// over Z_q using SHAKE256.  Used for the public 'a' polynomial in the
 /// hardened KEM path.
 pub fn expand_a_shake(seed: &[u8; 32], params: &Params) -> Poly {
-    let n = params.total_spins;
+    let n = params.ring_dim;
     let mut xof = ShakePrng::new(seed);
     let raw = xof.next_bytes(n * 2);
     let mut coeffs = Vec::with_capacity(n);
@@ -100,7 +100,7 @@ pub fn sample_cbd_shake(label: &[u8], eta: u8, n: usize) -> Poly {
 /// This is the critical step that must be deterministic for the FO check
 /// but must also be unpredictable to an attacker.
 pub fn derive_fo_materials(coin: &[u8], pk_hash: &[u8; 32], params: &Params) -> (Poly, Poly, Poly) {
-    let n = params.total_spins;
+    let n = params.ring_dim;
     let eta = params.cbd_eta;
 
     // Domain separation: 0x10 || coin || pk_hash

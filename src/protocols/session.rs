@@ -27,7 +27,9 @@ fn derive_nonce(direction: u8, msg_number: u64) -> [u8; 16] {
     hasher.update(&msg_number.to_le_bytes());
     let mut reader = hasher.finalize_xof();
     let mut nonce = [0u8; 16];
-    reader.read_exact(&mut nonce).expect("SHAKE256 read must not fail");
+    reader
+        .read_exact(&mut nonce)
+        .expect("SHAKE256 read must not fail");
     nonce
 }
 

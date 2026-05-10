@@ -6,7 +6,7 @@
 - **Tier 2 — COMPLETE** (committed): Standard sponge squeeze, SIV mode, auth tag rationale (Option B), versioned domain separators
 - **Tier 3 — COMPLETE** (committed): Differential analysis, KAT vectors, NIST/BigCrush infrastructure
 - **Tier 4 — COMPLETE** (committed): Barrett reduction, dudect harnesses, `#[inline(never)]`, proptest, cargo-fuzz
-- **Tier 5 — TODO** (documented below)
+- **Tier 5 — COMPLETE** (committed): 3-way hybrid KEM (ML-KEM-768), NTT-128, ProVerif model, specification doc, CI pipeline
 
 ---
 

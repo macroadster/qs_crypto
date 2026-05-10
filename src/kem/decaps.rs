@@ -25,7 +25,7 @@ pub fn decapsulate(sk: &PrivateKey, ct: &Ciphertext) -> crate::Result<SharedSecr
     // Use the sk's level byte unconditionally — no early return on mismatch.
     // The level-byte mismatch is folded into the constant-time FO check below.
     let params = params_from_level_byte(sk_bytes[0]);
-    let n = params.total_spins;
+    let n = params.ring_dim;
     let coin_len = params.coin_bytes();
 
     // Validate minimum lengths to prevent panics (not secret-dependent).

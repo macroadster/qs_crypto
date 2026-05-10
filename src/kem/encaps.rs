@@ -19,7 +19,7 @@ use crate::primitives::hash::spin_hash;
 pub(crate) fn encaps_inner(pk: &PublicKey, coin: &[u8]) -> (Ciphertext, [u8; 32]) {
     let pk_bytes = pk.as_bytes();
     let params = params_from_level_byte(pk_bytes[0]);
-    let n = params.total_spins;
+    let n = params.ring_dim;
 
     // Parse pk
     let seed: [u8; 32] = pk_bytes[1..33].try_into().unwrap();

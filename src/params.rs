@@ -40,8 +40,10 @@ pub struct Params {
     pub q: u16,
     /// Lattice side length (n)
     pub lattice_side: usize,
-    /// Total spins N = n²
+    /// Total spins N = n² (used by the sponge/lattice layer)
     pub total_spins: usize,
+    /// Polynomial ring dimension for the KEM (power of 2, enables NTT)
+    pub ring_dim: usize,
     /// Sponge rate — number of spins exposed during absorb/squeeze
     pub sponge_rate: usize,
     /// Sponge capacity — hidden spins providing security margin
@@ -62,6 +64,7 @@ impl Params {
                 q: FIELD_MODULUS,
                 lattice_side: 12,
                 total_spins: 144,
+                ring_dim: 128,
                 sponge_rate: 48,
                 sponge_capacity: 96,
                 permutation_rounds: 24,
@@ -73,6 +76,7 @@ impl Params {
                 q: FIELD_MODULUS,
                 lattice_side: 14,
                 total_spins: 196,
+                ring_dim: 256,
                 sponge_rate: 64,
                 sponge_capacity: 132,
                 permutation_rounds: 28,
@@ -84,6 +88,7 @@ impl Params {
                 q: FIELD_MODULUS,
                 lattice_side: 16,
                 total_spins: 256,
+                ring_dim: 256,
                 sponge_rate: 64,
                 sponge_capacity: 192,
                 permutation_rounds: 32,

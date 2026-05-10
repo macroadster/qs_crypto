@@ -79,7 +79,9 @@ fn derive_shake_subkey(key: &[u8; 32], nonce: &[u8; 16]) -> [u8; 32] {
     hasher.update(nonce);
     let mut reader = hasher.finalize_xof();
     let mut subkey = [0u8; 32];
-    reader.read_exact(&mut subkey).expect("SHAKE256 read must not fail");
+    reader
+        .read_exact(&mut subkey)
+        .expect("SHAKE256 read must not fail");
     subkey
 }
 
@@ -91,7 +93,9 @@ fn derive_chacha_nonce(key: &[u8; 32], nonce: &[u8; 16]) -> [u8; 12] {
     hasher.update(nonce);
     let mut reader = hasher.finalize_xof();
     let mut out = [0u8; 12];
-    reader.read_exact(&mut out).expect("SHAKE256 read must not fail");
+    reader
+        .read_exact(&mut out)
+        .expect("SHAKE256 read must not fail");
     out
 }
 
@@ -126,7 +130,10 @@ pub fn encrypt(key: &[u8; 32], nonce: &[u8; 16], aad: &[u8], plaintext: &[u8]) -
     let chacha_nonce = Nonce::from_slice(&chacha_nonce_bytes);
 
     // ChaCha20-Poly1305 encrypt with AAD
-    let payload = chacha20poly1305::aead::Payload { msg: plaintext, aad };
+    let payload = chacha20poly1305::aead::Payload {
+        msg: plaintext,
+        aad,
+    };
     let ct_with_tag = cipher
         .encrypt(chacha_nonce, payload)
         .expect("ChaCha20-Poly1305 encryption must not fail");
@@ -207,7 +214,9 @@ fn derive_synthetic_nonce(combined_key: &[u8; 32], aad: &[u8], plaintext: &[u8])
     hasher.update(plaintext);
     let mut reader = hasher.finalize_xof();
     let mut nonce = [0u8; 12];
-    reader.read_exact(&mut nonce).expect("SHAKE256 read must not fail");
+    reader
+        .read_exact(&mut nonce)
+        .expect("SHAKE256 read must not fail");
     nonce
 }
 
@@ -237,7 +246,10 @@ pub fn encrypt_siv(
     combined.zeroize();
 
     let chacha_nonce = Nonce::from_slice(&siv);
-    let payload = chacha20poly1305::aead::Payload { msg: plaintext, aad };
+    let payload = chacha20poly1305::aead::Payload {
+        msg: plaintext,
+        aad,
+    };
     let ct_with_tag = cipher
         .encrypt(chacha_nonce, payload)
         .expect("ChaCha20-Poly1305 encryption must not fail");
@@ -247,7 +259,11 @@ pub fn encrypt_siv(
     let mut tag = [0u8; 16];
     tag.copy_from_slice(&ct_with_tag[tag_start..]);
 
-    SivCiphertext { siv, ciphertext, tag }
+    SivCiphertext {
+        siv,
+        ciphertext,
+        tag,
+    }
 }
 
 /// Decrypt a SIV-mode ciphertext.  Returns `Error::AuthenticationFailed`

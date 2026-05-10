@@ -87,17 +87,15 @@ fn base_mul(a: &[i32], b: &[i32]) -> [i32; N] {
         let j = 4 * i;
         let t0 = barrett_reduce_signed(a[j + 1] as i64 * b[j + 1] as i64);
         r[j] = barrett_reduce_signed(a[j] as i64 * b[j] as i64 + t0 as i64 * zeta);
-        r[j + 1] = barrett_reduce_signed(
-            a[j] as i64 * b[j + 1] as i64 + a[j + 1] as i64 * b[j] as i64,
-        );
+        r[j + 1] =
+            barrett_reduce_signed(a[j] as i64 * b[j + 1] as i64 + a[j + 1] as i64 * b[j] as i64);
 
         // Second pair in group: indices [4i+2, 4i+3], twiddle = −zeta
         let j = 4 * i + 2;
         let t1 = barrett_reduce_signed(a[j + 1] as i64 * b[j + 1] as i64);
         r[j] = barrett_reduce_signed(a[j] as i64 * b[j] as i64 + t1 as i64 * neg_zeta);
-        r[j + 1] = barrett_reduce_signed(
-            a[j] as i64 * b[j + 1] as i64 + a[j + 1] as i64 * b[j] as i64,
-        );
+        r[j + 1] =
+            barrett_reduce_signed(a[j] as i64 * b[j + 1] as i64 + a[j + 1] as i64 * b[j] as i64);
     }
     r
 }
@@ -110,6 +108,110 @@ pub fn ntt_mul(a: &[i32; N], b: &[i32; N]) -> [i32; N] {
     let mut r = base_mul(&aa, &bb);
     inv_ntt(&mut r);
     r
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// NTT-128: 6-layer transform for Z_3329[X] / (X^128 + 1)
+//
+// Primitive 128th root of unity: ζ = 289 (= 17², since 289^64 ≡ −1 mod 3329).
+// Decomposes into 64 degree-2 factors, with 6 butterfly layers.
+// ═══════════════════════════════════════════════════════════════════
+
+pub const N128: usize = 128;
+
+/// ZETAS_128[k] = 289^{BitRev6(k)} mod 3329.
+const ZETAS_128: [i32; 64] = [
+    1, 1729, 2580, 3289, 2642, 630, 1897, 848, 1062, 1919, 193, 797, 2786, 3260, 569, 1746, 296,
+    2447, 1339, 1476, 3046, 56, 2240, 1333, 1426, 2094, 535, 2882, 2393, 2879, 1974, 821, 289, 331,
+    3253, 1756, 1197, 2304, 2277, 2055, 650, 1977, 2513, 632, 2865, 33, 1320, 1915, 2319, 1435,
+    807, 452, 1438, 2868, 1534, 2402, 2647, 2617, 1481, 648, 2474, 3110, 1227, 910,
+];
+
+/// Forward NTT for N=128 (Cooley-Tukey, 6 layers).
+pub fn ntt_128(r: &mut [i32; N128]) {
+    let mut k = 1usize;
+    for l in (1..7).rev() {
+        let len = 1usize << l;
+        for start in (0..N128).step_by(2 * len) {
+            let zeta = ZETAS_128[k] as i64;
+            k += 1;
+            for j in start..start + len {
+                let t = barrett_reduce_signed(zeta * black_box(r[j + len]) as i64);
+                let r_j = black_box(r[j]);
+                r[j] = barrett_reduce_signed(r_j as i64 + t as i64);
+                r[j + len] = barrett_reduce_signed(r_j as i64 - t as i64);
+            }
+        }
+    }
+}
+
+/// Inverse NTT for N=128 (Gentleman-Sande, 6 layers).
+pub fn inv_ntt_128(r: &mut [i32; N128]) {
+    let mut k = 63usize;
+    for l in 1..7 {
+        let len = 1usize << l;
+        for start in (0..N128).step_by(2 * len) {
+            let zeta = ZETAS_128[k] as i64;
+            k -= 1;
+            for j in start..start + len {
+                let r_j = black_box(r[j]) as i64;
+                let r_jl = black_box(r[j + len]) as i64;
+                r[j] = barrett_reduce_signed(r_j + r_jl);
+                r[j + len] = barrett_reduce_signed(zeta * (r_jl - r_j));
+            }
+        }
+    }
+    // Scale by 64⁻¹ mod Q = 3277
+    let f = 3277i64;
+    for x in r.iter_mut() {
+        *x = barrett_reduce_signed(black_box(*x) as i64 * f);
+    }
+}
+
+/// Base multiplication for N=128 NTT domain (32 groups of 4).
+fn base_mul_128(a: &[i32], b: &[i32]) -> [i32; N128] {
+    let mut r = [0i32; N128];
+    for i in 0..(N128 / 4) {
+        let zeta = ZETAS_128[32 + i] as i64;
+        let neg_zeta = Q as i64 - zeta;
+
+        let j = 4 * i;
+        let t0 = barrett_reduce_signed(a[j + 1] as i64 * b[j + 1] as i64);
+        r[j] = barrett_reduce_signed(a[j] as i64 * b[j] as i64 + t0 as i64 * zeta);
+        r[j + 1] =
+            barrett_reduce_signed(a[j] as i64 * b[j + 1] as i64 + a[j + 1] as i64 * b[j] as i64);
+
+        let j = 4 * i + 2;
+        let t1 = barrett_reduce_signed(a[j + 1] as i64 * b[j + 1] as i64);
+        r[j] = barrett_reduce_signed(a[j] as i64 * b[j] as i64 + t1 as i64 * neg_zeta);
+        r[j + 1] =
+            barrett_reduce_signed(a[j] as i64 * b[j + 1] as i64 + a[j + 1] as i64 * b[j] as i64);
+    }
+    r
+}
+
+pub fn ntt_mul_128(a: &[i32; N128], b: &[i32; N128]) -> [i32; N128] {
+    let mut aa = *a;
+    ntt_128(&mut aa);
+    let mut bb = *b;
+    ntt_128(&mut bb);
+    let mut r = base_mul_128(&aa, &bb);
+    inv_ntt_128(&mut r);
+    r
+}
+
+pub fn coeffs_to_i32_128(c: &[u16]) -> [i32; N128] {
+    let mut o = [0i32; N128];
+    for (i, coeff) in c.iter().enumerate().take(N128) {
+        o[i] = *coeff as i32;
+    }
+    o
+}
+
+pub fn i32_to_u16_128(a: &[i32; N128]) -> Vec<u16> {
+    a.iter()
+        .map(|&x| barrett_reduce_signed(x as i64) as u16)
+        .collect()
 }
 
 pub fn coeffs_to_i32(c: &[u16]) -> [i32; N] {

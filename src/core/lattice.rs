@@ -162,22 +162,17 @@ impl SpinLattice {
             let mut h_eff: u64 = 0;
             for (k, &(nr, nc)) in nbrs.iter().enumerate() {
                 let j = nr * n + nc;
-                h_eff = black_box(
-                    barrett_reduce_unsigned(
-                        h_eff
-                            + self.couplings[i * NUM_NEIGHBORS + k] as u64
-                                * self.spins[j] as u64,
-                    ) as u64,
-                );
+                h_eff = black_box(barrett_reduce_unsigned(
+                    h_eff + self.couplings[i * NUM_NEIGHBORS + k] as u64 * self.spins[j] as u64,
+                ) as u64);
             }
 
             // Position-dependent round constant (breaks spatial symmetry)
             let rc = barrett_reduce_unsigned((i as u64).wrapping_mul(2654435761)) as u64;
 
             // Mix current spin + effective field + round constant
-            let mixed = black_box(
-                barrett_reduce_unsigned(h_eff + self.spins[i] as u64 + rc) as u64,
-            );
+            let mixed =
+                black_box(barrett_reduce_unsigned(h_eff + self.spins[i] as u64 + rc) as u64);
 
             // Nonlinear S-box: cubing in Z_q (a permutation since gcd(3, q-1)=1)
             // black_box prevents the compiler from using the secret value for
@@ -217,9 +212,7 @@ impl SpinLattice {
                         black_box(self.couplings[i * NUM_NEIGHBORS + k] as u64)
                             * black_box(self.spins[i] as u64),
                     ) as u64;
-                    let contrib = barrett_reduce_unsigned(
-                        t * black_box(self.spins[j] as u64),
-                    );
+                    let contrib = barrett_reduce_unsigned(t * black_box(self.spins[j] as u64));
                     energy = energy.wrapping_sub(black_box(contrib) as i64);
                 }
             }

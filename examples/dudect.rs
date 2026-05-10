@@ -111,13 +111,7 @@ fn aead_decrypt(runner: &mut CtRunner, rng: &mut BenchRng) {
 
     for (class, tag) in classes.into_iter().zip(tags) {
         runner.run_one(class, || {
-            let _ = std::hint::black_box(aead::decrypt(
-                &key,
-                &nonce,
-                b"",
-                &ct.ciphertext,
-                &tag,
-            ));
+            let _ = std::hint::black_box(aead::decrypt(&key, &nonce, b"", &ct.ciphertext, &tag));
         });
     }
 }

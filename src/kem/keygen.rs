@@ -20,7 +20,7 @@ use getrandom;
 /// high-entropy OS seeds. This makes the KEM's concrete security
 /// reduction independent of the SpinSponge permutation.
 pub fn generate_keypair(params: &Params) -> KeyPair {
-    let n = params.total_spins;
+    let n = params.ring_dim;
     let level_byte = params.security_level.to_byte();
     let eta = params.cbd_eta;
 

@@ -11,8 +11,8 @@ use qs_crypto::{
 
 #[test]
 fn ciphertext_roundtrip_from_bytes() {
-    // QS128 (level byte 0x01) needs 1 + 4*144 = 577 bytes minimum
-    let mut raw = vec![0x00; 577];
+    // QS128 (level byte 0x01) needs 1 + 4*ring_dim(128) = 513 bytes minimum
+    let mut raw = vec![0x00; 513];
     raw[0] = 0x01; // valid QS128 level byte
     let ct = Ciphertext::from_bytes(&raw).unwrap();
     assert_eq!(ct.as_bytes(), &raw[..]);
@@ -518,5 +518,82 @@ fn hybrid_kem_wrong_key_fails() {
     let _ss_wrong =
         hybrid_decapsulate(&kp2.private_key(), &ct).expect("hybrid should not hard-fail");
     // We just check it doesn't panic and returns something different in practice
-    assert!(true);
+    drop(_ss_wrong);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Full 3-way hybrid KEM (Spin + X25519 + ML-KEM-768)
+// ═══════════════════════════════════════════════════════════════════
+
+#[test]
+fn full_hybrid_kem_roundtrip() {
+    use qs_crypto::hybrid::{
+        full_hybrid_decapsulate, full_hybrid_encapsulate, full_hybrid_generate_keypair,
+    };
+    use qs_crypto::Params;
+
+    let params = Params::default();
+    let kp = full_hybrid_generate_keypair(&params);
+    let pk = kp.public_key();
+
+    let (ct, ss1) = full_hybrid_encapsulate(&pk);
+    let ss2 = full_hybrid_decapsulate(&kp.private_key(), &ct).expect("decapsulation failed");
+
+    assert_eq!(ss1.as_bytes(), ss2.as_bytes());
+    assert_ne!(ss1.as_bytes(), &[0u8; 32]); // non-trivial secret
+}
+
+#[test]
+fn full_hybrid_kem_differs_from_2leg() {
+    use qs_crypto::hybrid::{
+        full_hybrid_encapsulate, full_hybrid_generate_keypair, hybrid_encapsulate,
+        hybrid_generate_keypair,
+    };
+    use qs_crypto::Params;
+
+    let params = Params::default();
+    let fh_kp = full_hybrid_generate_keypair(&params);
+    let h_kp = hybrid_generate_keypair(&params);
+
+    let (_, fh_ss) = full_hybrid_encapsulate(&fh_kp.public_key());
+    let (_, h_ss) = hybrid_encapsulate(&h_kp.public_key());
+
+    // Different keypairs and different combiners → different secrets
+    assert_ne!(fh_ss.as_bytes(), h_ss.as_bytes());
+}
+
+#[test]
+fn full_hybrid_kem_wrong_key_produces_different_secret() {
+    use qs_crypto::hybrid::{
+        full_hybrid_decapsulate, full_hybrid_encapsulate, full_hybrid_generate_keypair,
+    };
+    use qs_crypto::Params;
+
+    let params = Params::default();
+    let kp1 = full_hybrid_generate_keypair(&params);
+    let kp2 = full_hybrid_generate_keypair(&params);
+
+    let (ct, ss_correct) = full_hybrid_encapsulate(&kp1.public_key());
+
+    // Decapsulation with wrong key — Spin leg uses implicit rejection,
+    // so we get a valid but incorrect secret
+    let ss_wrong = full_hybrid_decapsulate(&kp2.private_key(), &ct).expect("should not hard-fail");
+    assert_ne!(ss_correct.as_bytes(), ss_wrong.as_bytes());
+}
+
+#[test]
+fn full_hybrid_kem_nondeterministic() {
+    use qs_crypto::hybrid::{full_hybrid_encapsulate, full_hybrid_generate_keypair};
+    use qs_crypto::Params;
+
+    let kp = full_hybrid_generate_keypair(&Params::default());
+    let pk = kp.public_key();
+
+    let (ct1, _) = full_hybrid_encapsulate(&pk);
+    let (ct2, _) = full_hybrid_encapsulate(&pk);
+
+    assert_ne!(
+        ct1, ct2,
+        "two encapsulations must produce different ciphertexts"
+    );
 }

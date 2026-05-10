@@ -89,7 +89,7 @@ pub fn poly_sub(a: &Poly, b: &Poly) -> Poly {
 
 /// `c = a · b  (mod X^N + 1, mod q)`
 ///
-/// Uses NTT (O(N log N)) for N=256, schoolbook (O(N²)) for other sizes.
+/// Uses NTT (O(N log N)) for N=256 and N=128, schoolbook (O(N²)) for other sizes.
 pub fn poly_mul(a: &Poly, b: &Poly) -> Poly {
     if a.n == 256 {
         use super::ntt;
@@ -99,8 +99,16 @@ pub fn poly_mul(a: &Poly, b: &Poly) -> Poly {
         let coeffs = ntt::i32_to_u16(&res);
         return Poly { coeffs, n: a.n };
     }
+    if a.n == 128 {
+        use super::ntt;
+        let aa = ntt::coeffs_to_i32_128(&a.coeffs);
+        let bb = ntt::coeffs_to_i32_128(&b.coeffs);
+        let res = ntt::ntt_mul_128(&aa, &bb);
+        let coeffs = ntt::i32_to_u16_128(&res);
+        return Poly { coeffs, n: a.n };
+    }
 
-    // Schoolbook for non-power-of-2 sizes (QS128 N=144, QS192 N=196)
+    // Schoolbook fallback for non-standard sizes
     let n = a.n;
 
     let mut temp = vec![0i64; 2 * n];
@@ -146,7 +154,7 @@ pub fn schoolbook_poly_mul(a: &Poly, b: &Poly) -> Poly {
 /// experiments. The hardened KEM uses `expand_a_shake`.
 #[allow(dead_code)]
 pub fn expand_a(seed: &[u8; 32], params: &Params) -> Poly {
-    let n = params.total_spins;
+    let n = params.ring_dim;
     let mut prng = SpinPrng::with_params(seed, params);
     let raw = prng.next_bytes(n * 2);
     let mut coeffs = Vec::with_capacity(n);
@@ -190,7 +198,9 @@ pub fn sample_cbd(prng: &mut SpinPrng, eta: u8, n: usize) -> Poly {
             }
             bit_pos += 1;
         }
-        coeffs.push(barrett_reduce_unsigned((a + FIELD_MODULUS as u32 - b) as u64));
+        coeffs.push(barrett_reduce_unsigned(
+            (a + FIELD_MODULUS as u32 - b) as u64,
+        ));
     }
     Poly { coeffs, n }
 }

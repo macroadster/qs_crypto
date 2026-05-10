@@ -52,7 +52,9 @@ fn shake_derive(key: &[u8; 32], label: &[u8], len: usize) -> Vec<u8> {
     hasher.update(label);
     let mut reader = hasher.finalize_xof();
     let mut out = vec![0u8; len];
-    reader.read_exact(&mut out).expect("SHAKE256 read must not fail");
+    reader
+        .read_exact(&mut out)
+        .expect("SHAKE256 read must not fail");
     out
 }
 
@@ -135,7 +137,9 @@ impl DoubleRatchet {
         hasher.update(b"qs-ratchet-kem");
         let mut reader = hasher.finalize_xof();
         let mut new_root = vec![0u8; 64];
-        reader.read_exact(&mut new_root).expect("SHAKE256 read must not fail");
+        reader
+            .read_exact(&mut new_root)
+            .expect("SHAKE256 read must not fail");
         self.root_key.copy_from_slice(&new_root[..32]);
         self.send_chain_key.copy_from_slice(&new_root[32..]);
 
