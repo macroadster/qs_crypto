@@ -20,20 +20,30 @@ use getrandom;
 /// high-entropy OS seeds. This makes the KEM's concrete security
 /// reduction independent of the SpinSponge permutation.
 pub fn generate_keypair(params: &Params) -> KeyPair {
+    let mut seed = [0u8; 32];
+    getrandom::getrandom(&mut seed).expect("OS RNG failed");
+
+    let mut os_seed = [0u8; 64];
+    getrandom::getrandom(&mut os_seed).expect("OS RNG failed");
+
+    let kp = generate_keypair_deterministic(params, &seed, &os_seed);
+    os_seed.zeroize();
+    kp
+}
+
+/// Deterministic keypair generation from caller-supplied seeds.
+///
+/// `seed` (32 bytes) expands the public polynomial **a**.
+/// `os_seed` (64 bytes) derives the secret **s** and noise **e**.
+///
+/// This is exposed for reproducible KAT vector generation; production
+/// callers should use [`generate_keypair`] which samples from OS entropy.
+pub fn generate_keypair_deterministic(params: &Params, seed: &[u8; 32], os_seed: &[u8; 64]) -> KeyPair {
     let n = params.ring_dim;
     let level_byte = params.security_level.to_byte();
     let eta = params.cbd_eta;
 
-    // Sample random seed for the public polynomial a(X) from OS
-    let mut seed = [0u8; 32];
-    getrandom::getrandom(&mut seed).expect("OS RNG failed");
-
-    let a = expand_a_shake(&seed, params);
-
-    // Sample secret s and noise e from CBD using OS entropy + SHAKE
-    // We use distinct domain-separated labels for s and e.
-    let mut os_seed = [0u8; 64];
-    getrandom::getrandom(&mut os_seed).expect("OS RNG failed");
+    let a = expand_a_shake(seed, params);
 
     let s_label = {
         let mut l = b"qs-kem-keygen-s".to_vec();
@@ -49,9 +59,6 @@ pub fn generate_keypair(params: &Params) -> KeyPair {
     let s = sample_cbd_shake(&s_label, eta, n);
     let e = sample_cbd_shake(&e_label, eta, n);
 
-    // Zeroize the OS seed — it derives the secret key material.
-    os_seed.zeroize();
-
     // b = a·s + e  (mod X^N+1, mod q)
     let b = poly_add(&poly_mul(&a, &s), &e);
 
@@ -59,7 +66,7 @@ pub fn generate_keypair(params: &Params) -> KeyPair {
     // pk = [level, seed(32), b(2N)]
     let mut pk_bytes = Vec::with_capacity(1 + 32 + n * 2);
     pk_bytes.push(level_byte);
-    pk_bytes.extend_from_slice(&seed);
+    pk_bytes.extend_from_slice(seed);
     pk_bytes.extend_from_slice(&b.to_bytes());
 
     // sk = [level, s(2N), pk]

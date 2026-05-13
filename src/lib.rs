@@ -145,7 +145,10 @@ pub use kem::hybrid::{
 pub use kem::types::{
     Ciphertext, EncapsulationResult, KeyPair, PrivateKey, PublicKey, SharedSecret,
 };
-pub use kem::{decapsulate, encapsulate, generate_keypair};
+pub use kem::{
+    decapsulate, encapsulate, encapsulate_deterministic, generate_keypair,
+    generate_keypair_deterministic,
+};
 
 // Layer 3
 pub use protocols::pake::{pake_register, PakeClient, PakeServer, RegistrationRecord};

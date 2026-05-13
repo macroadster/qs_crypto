@@ -14,7 +14,8 @@ use std::fs;
 use qs_crypto::core::sponge::SpinSponge;
 use qs_crypto::params::{Params, SecurityLevel};
 use qs_crypto::primitives::{aead, hash::spin_hash, kdf::spin_kdf};
-use qs_crypto::{decapsulate, encapsulate, generate_keypair};
+use sha3::{Shake256, digest::{ExtendableOutput, Update}};
+use qs_crypto::{decapsulate, encapsulate_deterministic, generate_keypair_deterministic};
 
 fn to_hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{:02x}", b)).collect()
@@ -265,6 +266,20 @@ fn generate_sponge_vectors() -> Vec<SpongeVector> {
         .collect()
 }
 
+/// Derive deterministic seed material from a master seed using SHAKE256.
+fn derive_kem_seeds(level_name: &str, case: u8) -> ([u8; 32], [u8; 64], [u8; 32]) {
+    let mut xof = Shake256::default();
+    xof.update(b"qs-crypto-kat-kem-");
+    xof.update(level_name.as_bytes());
+    xof.update(&[b'-', case]);
+    let mut buf = [0u8; 128]; // 32 (seed) + 64 (os_seed) + 32 (coin)
+    xof.finalize_xof_into(&mut buf);
+    let seed: [u8; 32] = buf[..32].try_into().unwrap();
+    let os_seed: [u8; 64] = buf[32..96].try_into().unwrap();
+    let coin: [u8; 32] = buf[96..128].try_into().unwrap();
+    (seed, os_seed, coin)
+}
+
 fn generate_kem_vectors() -> Vec<KemVector> {
     println!("  kem vectors (all security levels)...");
 
@@ -278,11 +293,13 @@ fn generate_kem_vectors() -> Vec<KemVector> {
 
     for (level, level_name) in &levels {
         let params = Params::from_security_level(*level);
+        let coin_len = params.coin_bytes();
 
-        // Generate 3 cases per level
-        for case in 0..3 {
-            let kp = generate_keypair(&params);
-            let result = encapsulate(&kp.public_key);
+        // Generate 3 cases per level with deterministic seeds
+        for case in 0..3u8 {
+            let (seed, os_seed, coin_buf) = derive_kem_seeds(level_name, case);
+            let kp = generate_keypair_deterministic(&params, &seed, &os_seed);
+            let result = encapsulate_deterministic(&kp.public_key, &coin_buf[..coin_len]);
 
             // Verify decaps works before storing
             let ss_dec = decapsulate(&kp.private_key, &result.ciphertext)

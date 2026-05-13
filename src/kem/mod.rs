@@ -18,7 +18,7 @@ mod xof;
 mod ntt;
 
 pub use decaps::decapsulate;
-pub use encaps::encapsulate;
-pub use keygen::generate_keypair;
+pub use encaps::{encapsulate, encapsulate_deterministic};
+pub use keygen::{generate_keypair, generate_keypair_deterministic};
 pub use ring::{poly_mul, schoolbook_poly_mul, Poly};
 pub use types::*;

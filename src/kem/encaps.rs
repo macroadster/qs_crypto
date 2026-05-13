@@ -81,3 +81,15 @@ pub fn encapsulate(pk: &PublicKey) -> EncapsulationResult {
         shared_secret: SharedSecret::from_bytes(ss_bytes),
     }
 }
+
+/// Deterministic encapsulation with a caller-supplied FO coin.
+///
+/// This is exposed for reproducible KAT vector generation; production
+/// callers should use [`encapsulate`] which samples from OS entropy.
+pub fn encapsulate_deterministic(pk: &PublicKey, coin: &[u8]) -> EncapsulationResult {
+    let (ciphertext, ss_bytes) = encaps_inner(pk, coin);
+    EncapsulationResult {
+        ciphertext,
+        shared_secret: SharedSecret::from_bytes(ss_bytes),
+    }
+}
