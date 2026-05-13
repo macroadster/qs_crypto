@@ -38,7 +38,11 @@ pub fn generate_keypair(params: &Params) -> KeyPair {
 ///
 /// This is exposed for reproducible KAT vector generation; production
 /// callers should use [`generate_keypair`] which samples from OS entropy.
-pub fn generate_keypair_deterministic(params: &Params, seed: &[u8; 32], os_seed: &[u8; 64]) -> KeyPair {
+pub fn generate_keypair_deterministic(
+    params: &Params,
+    seed: &[u8; 32],
+    os_seed: &[u8; 64],
+) -> KeyPair {
     let n = params.ring_dim;
     let level_byte = params.security_level.to_byte();
     let eta = params.cbd_eta;

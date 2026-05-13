@@ -14,8 +14,11 @@ use std::fs;
 use qs_crypto::core::sponge::SpinSponge;
 use qs_crypto::params::{Params, SecurityLevel};
 use qs_crypto::primitives::{aead, hash::spin_hash, kdf::spin_kdf};
-use sha3::{Shake256, digest::{ExtendableOutput, Update}};
 use qs_crypto::{decapsulate, encapsulate_deterministic, generate_keypair_deterministic};
+use sha3::{
+    digest::{ExtendableOutput, Update},
+    Shake256,
+};
 
 fn to_hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{:02x}", b)).collect()
