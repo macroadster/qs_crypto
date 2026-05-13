@@ -6,7 +6,7 @@ QS-Crypto is an experimental cryptographic library built around a novel sponge p
 
 The KEM layer has been **hardened** (2026) to use SHAKE256 for all internal randomness. Its security therefore reduces to standard Ring-LWE + SHAKE256 and no longer depends on the unanalyzed permutation.
 
-> **Research project — not for production use without further analysis.** The symmetric primitives rest on a novel, statistically unvalidated permutation. See [Status](#status) and [SECURITY.md](SECURITY.md) for details.
+> **Research project — not for production use without further analysis.** The symmetric primitives rest on a novel, statistically unvalidated permutation. See [Status](#status) and [SECURITY.md](docs/SECURITY.md) for details.
 
 ---
 
@@ -62,9 +62,7 @@ Each layer depends only on the layers below it. Users can adopt the sponge alone
 ```
 qs_crypto/
 ├── Cargo.toml
-├── DESIGN_PROPOSAL.md           # Full technical design document
-├── RELEASE_NOTES_v0.2.md
-├── SECURITY.md
+├── LICENSE                       # Apache License 2.0
 ├── src/
 │   ├── lib.rs                   # Public API re-exports
 │   ├── error.rs                 # Error types
@@ -87,6 +85,9 @@ qs_crypto/
 │   ├── differential_ntt.rs      # NTT vs schoolbook correctness (6000+ trials)
 │   └── stats.rs                 # Monte Carlo statistical tests
 ├── docs/
+│   ├── DESIGN_PROPOSAL.md       # Full technical design document
+│   ├── RELEASE_NOTES_v0.2.md
+│   ├── SECURITY.md
 └── legacy/                      # Original Python prototypes
     ├── q.py
     ├── starlight_crypto.py
@@ -283,7 +284,7 @@ and clean clippy/fmt. The library is feature-complete for its research scope.
 - [x] Layer 3 — OPAQUE-Spin PAKE, Double Ratchet (symmetric + KEM ratchet), Session (encrypt/decrypt/save/restore)
 - [x] Visual fingerprint renderer (plain + identity-bound)
 - [x] 77 integration tests across all layers
-- [x] Full technical design document ([DESIGN_PROPOSAL.md](DESIGN_PROPOSAL.md))
+- [x] Full technical design document ([DESIGN_PROPOSAL.md](docs/DESIGN_PROPOSAL.md))
 - [x] CLI tools: interactive demo, benchmark runner, statistical validation harness
 - [x] Secret material auto-zeroed via `Zeroize` + `ZeroizeOnDrop`
 - [x] Constant-time tag comparison via `subtle` crate
@@ -329,4 +330,4 @@ The statistical harness (`cargo run --bin stats -- --permutation --trials 10000`
 
 ## License
 
-TBD
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for the full text.
