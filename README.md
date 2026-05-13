@@ -28,27 +28,27 @@ The hardness does not depend on integer factoring or discrete logarithms, making
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│                      PUBLIC API  (lib.rs)                  │
-│  generate_keypair · encapsulate · Session · PAKE          │
+│                      PUBLIC API  (lib.rs)                │
+│  generate_keypair · encapsulate · Session · PAKE         │
 ├──────────────────────────────────────────────────────────┤
-│  Layer 3: PROTOCOLS           Layer 2: ASYMMETRIC         │
+│  Layer 3: PROTOCOLS           Layer 2: ASYMMETRIC        │
 │  ┌────────────────────┐      ┌─────────────────────┐     │
 │  │ OPAQUE-Spin PAKE   │      │  Spin Glass KEM     │     │
 │  │ Double Ratchet     │─────▶│  KeyGen / Encaps /  │     │
 │  │ Session Manager    │      │  Decaps             │     │
 │  └────────┬───────────┘      └──────────┬──────────┘     │
-│           │                             │                 │
-│           ▼                             ▼                 │
-│  Layer 1: SYMMETRIC PRIMITIVES                            │
+│           │                             │                │
+│           ▼                             ▼                │
+│  Layer 1: SYMMETRIC PRIMITIVES                           │
 │  ┌──────────────────────────────────────────────┐        │
 │  │ SpinHash · SpinPRNG · SpinKDF · SpinAEAD     │        │
 │  └──────────────────────┬───────────────────────┘        │
-│                         │                                 │
-│                         ▼                                 │
-│  Layer 0: SPIN GLASS CORE                                 │
+│                         │                                │
+│                         ▼                                │
+│  Layer 0: SPIN GLASS CORE                                │
 │  ┌──────────────────────────────────────────────┐        │
-│  │ SpinLattice (simulation engine)               │        │
-│  │ SpinSponge  (sponge construction)             │        │
+│  │ SpinLattice (simulation engine)              │        │
+│  │ SpinSponge  (sponge construction)            │        │
 │  └──────────────────────────────────────────────┘        │
 └──────────────────────────────────────────────────────────┘
 ```

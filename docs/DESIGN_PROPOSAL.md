@@ -150,30 +150,30 @@ The library achieves this through:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    PUBLIC API (api.py)                       │
+│                    PUBLIC API (api.py)                      │
 │  generate_keypair  kem_encaps  Session  PAKEClient/Server   │
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
 │  Layer 3: PROTOCOLS        Layer 2: ASYMMETRIC              │
-│  ┌──────────────────┐     ┌─────────────────────┐          │
-│  │ OPAQUE-Spin PAKE │     │  Spin Glass KEM     │          │
-│  │ Double Ratchet   │────▶│  KeyGen / Encaps /  │          │
-│  │ Session Manager  │     │  Decaps             │          │
-│  └────────┬─────────┘     └──────────┬──────────┘          │
+│  ┌──────────────────┐     ┌─────────────────────┐           │
+│  │ OPAQUE-Spin PAKE │     │  Spin Glass KEM     │           │
+│  │ Double Ratchet   │────▶│  KeyGen / Encaps /  │           │
+│  │ Session Manager  │     │  Decaps             │           │
+│  └────────┬─────────┘     └──────────┬──────────┘           │
 │           │                          │                      │
 │           ▼                          ▼                      │
 │  Layer 1: SYMMETRIC PRIMITIVES                              │
-│  ┌──────────────────────────────────────────────┐          │
-│  │ SpinHash  SpinPRNG  SpinKDF  SpinAEAD        │          │
-│  └────────────────────┬─────────────────────────┘          │
+│  ┌──────────────────────────────────────────────┐           │
+│  │ SpinHash  SpinPRNG  SpinKDF  SpinAEAD        │           │
+│  └────────────────────┬─────────────────────────┘           │
 │                       │                                     │
 │                       ▼                                     │
 │  Layer 0: SPIN GLASS CORE                                   │
-│  ┌──────────────────────────────────────────────┐          │
-│  │ SpinLattice (simulation engine)               │          │
-│  │ SpinSponge  (sponge construction)             │          │
-│  │ Params      (security parameters)             │          │
-│  └──────────────────────────────────────────────┘          │
+│  ┌──────────────────────────────────────────────┐           │
+│  │ SpinLattice (simulation engine)              │           │
+│  │ SpinSponge  (sponge construction)            │           │
+│  │ Params      (security parameters)            │           │
+│  └──────────────────────────────────────────────┘           │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
 ```
