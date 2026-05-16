@@ -29,7 +29,33 @@ be recorded below as they are collected.
 
 ### Audit Results
 
-_Not yet collected — run the harness and record results here._
+Collected with `cargo run --release --example dudect` (v0.3, release profile).
+
+| Function | max \|t\| | n (samples) | Verdict |
+|---|---|---|---|
+| `SpinLattice::step()` | 2.38 | 0.009M | **PASS** |
+| `aead::encrypt` | 2.50 | 0.008M | **PASS** |
+| `aead::decrypt` | 2.40 | 0.007M | **PASS** |
+| `decapsulate` (FO rejection) | 1.74 | 0.001M | **PASS** |
+
+All four functions show `max |t| < 5`, providing statistical evidence
+that the two input classes are timing-indistinguishable.
+
+#### Fixes applied to achieve these results
+
+Two timing leaks were found in the initial audit and fixed:
+
+1. **`aead::decrypt` (was |t|=8.18):** The `chacha20poly1305` crate's
+   `decrypt()` uses a verify-then-decrypt pattern that skips the ChaCha20
+   keystream XOR when the Poly1305 tag fails.  Fixed by replacing the
+   crate's `decrypt()` with a double-`encrypt_in_place_detached` approach
+   that always applies the full keystream regardless of tag validity.
+
+2. **`kem::decapsulate` (was |t|=7.95):** `decode_message()` and
+   `encode_message()` in `src/kem/ring.rs` used data-dependent branches
+   on coefficient values (`if c >= half_q`, `if d_half < d0`, `if bit == 1`).
+   Fixed with branchless arithmetic: signed-shift masks for constant-time
+   min/abs/select, and multiplication instead of conditional assignment.
 
 ## Side-Channel Hardening (Tier 4)
 

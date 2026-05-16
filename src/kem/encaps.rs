@@ -49,7 +49,7 @@ pub(crate) fn encaps_inner(pk: &PublicKey, coin: &[u8]) -> (Ciphertext, [u8; 32]
     // Shared secret = SpinHash(0x11 ‖ m ‖ ct)  — still uses the library hash
     // (acceptable: the SS is user-visible output; the reduction protects the
     //  confidentiality of the message inside the KEM).
-    let mut ss_input = Vec::new();
+    let mut ss_input = Vec::with_capacity(1 + coin.len() + ct_bytes.len());
     ss_input.push(0x11);
     ss_input.extend_from_slice(coin);
     ss_input.extend_from_slice(&ct_bytes);

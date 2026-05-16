@@ -207,38 +207,48 @@ pub fn sample_cbd(prng: &mut SpinPrng, eta: u8, n: usize) -> Poly {
 
 /// Encode a message (byte slice) into a polynomial.
 /// Each bit maps to 0 or ⌊q/2⌋.
+///
+/// Uses branchless multiplication instead of a conditional to avoid
+/// data-dependent timing on message bits.
 pub fn encode_message(m: &[u8], n: usize) -> Poly {
     let half_q = FIELD_MODULUS / 2;
     let mut coeffs = vec![0u16; n];
     let bits = m.len() * 8;
     for i in 0..bits.min(n) {
-        if (m[i / 8] >> (i % 8)) & 1 == 1 {
-            coeffs[i] = half_q;
-        }
+        let bit = ((m[i / 8] >> (i % 8)) & 1) as u16;
+        coeffs[i] = bit * half_q;
     }
     Poly { coeffs, n }
 }
 
 /// Decode a polynomial back to message bytes.
 /// Each coefficient is rounded to the nearest of {0, ⌊q/2⌋}.
+///
+/// All comparisons use branchless arithmetic so the function runs in
+/// constant time with respect to the coefficient values (critical for
+/// the Fujisaki-Okamoto implicit-rejection path in decaps).
 pub fn decode_message(poly: &Poly, msg_bytes: usize) -> Vec<u8> {
-    let q = FIELD_MODULUS;
-    let half_q = q / 2;
+    let q = FIELD_MODULUS as i32;
+    let half_q = (FIELD_MODULUS / 2) as i32;
     let mut result = vec![0u8; msg_bytes];
     let bits = msg_bytes * 8;
     for i in 0..bits.min(poly.n) {
-        let c = poly.coeffs[i];
-        // Distance to 0
-        let d0 = c.min(q - c) as u32;
-        // Distance to q/2
-        let d_half = if c >= half_q {
-            (c - half_q) as u32
-        } else {
-            (half_q - c) as u32
-        };
-        if d_half < d0 {
-            result[i / 8] |= 1 << (i % 8);
-        }
+        let c = black_box(poly.coeffs[i] as i32);
+
+        // d0 = min(c, q - c): distance to 0 on the ring (branchless)
+        let qmc = q - c;
+        let diff = c - qmc;
+        let lt_mask = diff >> 31; // -1 if c < q-c, 0 otherwise
+        let d0 = qmc + (diff & lt_mask); // min(c, q-c)
+
+        // d_half = |c - half_q|: distance to q/2 (branchless abs)
+        let d = c - half_q;
+        let sign = d >> 31;
+        let d_half = (d ^ sign) - sign;
+
+        // bit = 1 iff d_half < d0 (coefficient closer to q/2 than to 0)
+        let bit = (((d_half - d0) >> 31) & 1) as u8;
+        result[i / 8] |= bit << (i % 8);
     }
     result
 }

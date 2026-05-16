@@ -22,7 +22,7 @@
 //! This mirrors the KEM hardening strategy (SHAKE256 for all internal
 //! randomness) extended to the symmetric layer.
 
-use chacha20poly1305::aead::Aead;
+use chacha20poly1305::aead::{Aead, AeadInPlace};
 use chacha20poly1305::{ChaCha20Poly1305, KeyInit, Nonce};
 use sha3::digest::{ExtendableOutput, Update};
 use sha3::Shake256;
@@ -149,6 +149,18 @@ pub fn encrypt(key: &[u8; 32], nonce: &[u8; 16], aad: &[u8], plaintext: &[u8]) -
 
 /// Decrypt and authenticate `ciphertext`. Returns `Error::AuthenticationFailed`
 /// if the Poly1305 tag does not verify — no plaintext is released in that case.
+///
+/// ## Constant-time guarantee
+///
+/// The upstream `chacha20poly1305` crate skips the ChaCha20 keystream XOR
+/// when the Poly1305 tag fails (verify-then-decrypt pattern), creating a
+/// measurable timing difference between valid and invalid tags.
+///
+/// We avoid this by using `encrypt_in_place_detached` (which always runs
+/// the full keystream) twice:
+///   1. encrypt(ciphertext) → plaintext + tag_wrong   (stream-cipher self-inverse)
+///   2. encrypt(plaintext)  → ciphertext + expected_tag
+/// Both calls always execute regardless of tag validity.
 pub fn decrypt(
     key: &[u8; 32],
     nonce: &[u8; 16],
@@ -169,19 +181,37 @@ pub fn decrypt(
 
     let chacha_nonce = Nonce::from_slice(&chacha_nonce_bytes);
 
-    // Reassemble ciphertext ‖ tag for the chacha20poly1305 crate
-    let mut ct_with_tag = Vec::with_capacity(ciphertext.len() + 16);
-    ct_with_tag.extend_from_slice(ciphertext);
-    ct_with_tag.extend_from_slice(tag);
+    // Phase 1: Decrypt by applying the ChaCha20 keystream via encrypt.
+    // For a stream cipher, encrypt(ct) = ct ⊕ keystream = plaintext.
+    // This always runs regardless of tag validity.
+    let mut plaintext = ciphertext.to_vec();
+    let _tag_over_pt = cipher
+        .encrypt_in_place_detached(chacha_nonce, aad, &mut plaintext)
+        .expect("ChaCha20 encrypt must not fail");
 
-    let payload = chacha20poly1305::aead::Payload {
-        msg: &ct_with_tag,
-        aad,
-    };
+    // Phase 2: Re-encrypt the plaintext to recover the correct expected tag.
+    // encrypt(pt) = pt ⊕ keystream = ciphertext, and the Poly1305 tag is
+    // computed over the ciphertext output — matching the original encryption.
+    let mut re_ct = plaintext.clone();
+    let expected_tag = cipher
+        .encrypt_in_place_detached(chacha_nonce, aad, &mut re_ct)
+        .expect("ChaCha20 encrypt must not fail");
+    re_ct.zeroize();
 
-    cipher
-        .decrypt(chacha_nonce, payload)
-        .map_err(|_| Error::AuthenticationFailed)
+    // Phase 3: Constant-time tag comparison.
+    let tag_ok = expected_tag.as_slice().ct_eq(tag).unwrap_u8();
+
+    // Phase 4: Conditionally zero plaintext on auth failure (branchless).
+    let mask = tag_ok.wrapping_neg(); // 0xFF if ok, 0x00 if not
+    for b in plaintext.iter_mut() {
+        *b &= mask;
+    }
+
+    if tag_ok == 1 {
+        Ok(plaintext)
+    } else {
+        Err(Error::AuthenticationFailed)
+    }
 }
 
 // ── SIV (Synthetic-IV) mode ────────────────────────────────────────
@@ -268,6 +298,8 @@ pub fn encrypt_siv(
 
 /// Decrypt a SIV-mode ciphertext.  Returns `Error::AuthenticationFailed`
 /// if the Poly1305 tag or the SIV binding check fails.
+///
+/// Uses the same constant-time decrypt strategy as [`decrypt`].
 pub fn decrypt_siv(
     key: &[u8; 32],
     nonce: &[u8; 16],
@@ -287,26 +319,38 @@ pub fn decrypt_siv(
 
     let chacha_nonce = Nonce::from_slice(siv);
 
-    let mut ct_with_tag = Vec::with_capacity(ciphertext.len() + 16);
-    ct_with_tag.extend_from_slice(ciphertext);
-    ct_with_tag.extend_from_slice(tag);
+    // Phase 1: Decrypt via encrypt (constant-time keystream application).
+    let mut plaintext = ciphertext.to_vec();
+    let _tag_over_pt = cipher
+        .encrypt_in_place_detached(chacha_nonce, aad, &mut plaintext)
+        .expect("ChaCha20 encrypt must not fail");
 
-    let payload = chacha20poly1305::aead::Payload {
-        msg: &ct_with_tag,
-        aad,
-    };
+    // Phase 2: Re-encrypt to obtain the correct expected tag.
+    let mut re_ct = plaintext.clone();
+    let expected_tag = cipher
+        .encrypt_in_place_detached(chacha_nonce, aad, &mut re_ct)
+        .expect("ChaCha20 encrypt must not fail");
+    re_ct.zeroize();
 
-    let plaintext = cipher
-        .decrypt(chacha_nonce, payload)
-        .map_err(|_| Error::AuthenticationFailed)?;
+    // Phase 3: Constant-time tag comparison.
+    let tag_ok = expected_tag.as_slice().ct_eq(tag).unwrap_u8();
 
-    // SIV binding: re-derive the synthetic nonce and verify it matches
+    // Phase 4: SIV binding — re-derive the synthetic nonce and verify.
+    // This always runs regardless of tag_ok to avoid leaking tag status.
     let expected_siv = derive_synthetic_nonce(&combined, aad, &plaintext);
     combined.zeroize();
+    let siv_ok = expected_siv.ct_eq(siv).unwrap_u8();
 
-    if expected_siv.ct_eq(siv).unwrap_u8() != 1 {
-        return Err(Error::AuthenticationFailed);
+    // Both tag and SIV must match.
+    let ok = tag_ok & siv_ok;
+    let mask = ok.wrapping_neg();
+    for b in plaintext.iter_mut() {
+        *b &= mask;
     }
 
-    Ok(plaintext)
+    if ok == 1 {
+        Ok(plaintext)
+    } else {
+        Err(Error::AuthenticationFailed)
+    }
 }

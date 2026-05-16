@@ -60,7 +60,7 @@ pub fn decapsulate(sk: &PrivateKey, ct: &Ciphertext) -> crate::Result<SharedSecr
     let mask = ct_match.unwrap_u8().wrapping_neg();
 
     // Implicit-rejection secret: SpinHash(0x12 ‖ sk ‖ ct)
-    let mut rej_input = Vec::new();
+    let mut rej_input = Vec::with_capacity(1 + sk_bytes.len() + ct_bytes.len());
     rej_input.push(0x12);
     rej_input.extend_from_slice(sk_bytes);
     rej_input.extend_from_slice(ct_bytes);
