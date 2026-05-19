@@ -160,7 +160,7 @@ pub fn encrypt(key: &[u8; 32], nonce: &[u8; 16], aad: &[u8], plaintext: &[u8]) -
 /// the full keystream) twice:
 ///   1. encrypt(ciphertext) → plaintext + tag_wrong   (stream-cipher self-inverse)
 ///   2. encrypt(plaintext)  → ciphertext + expected_tag
-/// Both calls always execute regardless of tag validity.
+///      Both calls always execute regardless of tag validity.
 pub fn decrypt(
     key: &[u8; 32],
     nonce: &[u8; 16],
