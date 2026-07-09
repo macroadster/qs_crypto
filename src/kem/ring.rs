@@ -1,8 +1,8 @@
 //! Polynomial arithmetic over Z_q\[X\]/(X^N + 1).
 //!
 //! Provides the algebraic foundation for the Ring-LWE KEM.  N=256 (QS256)
-//! uses NTT-based O(N log N) multiplication; other sizes fall back to
-//! schoolbook O(N²).
+//! and N=128 (QS128) use NTT-based O(N log N) multiplication; other sizes
+//! fall back to schoolbook O(N²).
 
 use crate::core::reduce::{barrett_reduce_signed, barrett_reduce_unsigned};
 use crate::params::{Params, SecurityLevel, FIELD_MODULUS};
@@ -89,26 +89,15 @@ pub fn poly_sub(a: &Poly, b: &Poly) -> Poly {
 
 /// `c = a · b  (mod X^N + 1, mod q)`
 ///
-/// Uses NTT (O(N log N)) for N=256 and N=128, schoolbook (O(N²)) for other sizes.
+/// Uses NTT (O(N log N)) when [`uses_ntt_mul`] is true (N=256 and N=128);
+/// otherwise schoolbook (O(N²)). Dispatch is gated on that helper so path
+/// queries and implementation cannot drift apart.
 pub fn poly_mul(a: &Poly, b: &Poly) -> Poly {
-    if a.n == 256 {
-        use super::ntt;
-        let aa = ntt::coeffs_to_i32(&a.coeffs);
-        let bb = ntt::coeffs_to_i32(&b.coeffs);
-        let res = ntt::ntt_mul(&aa, &bb);
-        let coeffs = ntt::i32_to_u16(&res);
-        return Poly { coeffs, n: a.n };
-    }
-    if a.n == 128 {
-        use super::ntt;
-        let aa = ntt::coeffs_to_i32_128(&a.coeffs);
-        let bb = ntt::coeffs_to_i32_128(&b.coeffs);
-        let res = ntt::ntt_mul_128(&aa, &bb);
-        let coeffs = ntt::i32_to_u16_128(&res);
-        return Poly { coeffs, n: a.n };
+    if uses_ntt_mul(a.n) {
+        return ntt_poly_mul(a, b);
     }
 
-    // Schoolbook fallback for non-standard sizes
+    // Schoolbook fallback for non-NTT sizes (timing-hardened with black_box)
     let n = a.n;
 
     let mut temp = vec![0i64; 2 * n];
@@ -126,6 +115,30 @@ pub fn poly_mul(a: &Poly, b: &Poly) -> Poly {
         coeffs[k] = barrett_reduce_signed(val) as u16;
     }
     Poly { coeffs, n }
+}
+
+/// NTT fast path; only called when [`uses_ntt_mul`]`(a.n)` is true.
+#[inline]
+fn ntt_poly_mul(a: &Poly, b: &Poly) -> Poly {
+    use super::ntt;
+    match a.n {
+        256 => {
+            let aa = ntt::coeffs_to_i32(&a.coeffs);
+            let bb = ntt::coeffs_to_i32(&b.coeffs);
+            let res = ntt::ntt_mul(&aa, &bb);
+            let coeffs = ntt::i32_to_u16(&res);
+            Poly { coeffs, n: 256 }
+        }
+        128 => {
+            let aa = ntt::coeffs_to_i32_128(&a.coeffs);
+            let bb = ntt::coeffs_to_i32_128(&b.coeffs);
+            let res = ntt::ntt_mul_128(&aa, &bb);
+            let coeffs = ntt::i32_to_u16_128(&res);
+            Poly { coeffs, n: 128 }
+        }
+        // uses_ntt_mul is the single source of truth for supported NTT sizes.
+        n => unreachable!("uses_ntt_mul({n}) was true but no NTT implementation"),
+    }
 }
 
 /// Exposed for differential testing and verification (always the reliable schoolbook version)
@@ -267,4 +280,111 @@ pub fn hash_pk(pk_bytes: &[u8]) -> [u8; 32] {
 pub fn params_from_level_byte(b: u8) -> Params {
     let level = SecurityLevel::from_byte(b).expect("invalid security level byte");
     Params::from_security_level(level)
+}
+
+/// Returns true when `poly_mul` uses the NTT fast path for dimension `n`.
+///
+/// QS128 (`n == 128`) and QS256 (`n == 256`) are NTT-backed; other sizes
+/// fall through to schoolbook. This is the **single source of truth** for
+/// dispatch: [`poly_mul`] calls [`ntt_poly_mul`] only when this returns true.
+#[inline]
+pub fn uses_ntt_mul(n: usize) -> bool {
+    matches!(n, 128 | 256)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::params::SecurityLevel;
+
+    #[test]
+    fn qs128_uses_ntt_path() {
+        let params = Params::from_security_level(SecurityLevel::QS128);
+        assert_eq!(params.ring_dim, 128, "QS128 must use ring_dim 128");
+        assert!(
+            uses_ntt_mul(params.ring_dim),
+            "QS128 poly_mul must use NTT-128, not schoolbook"
+        );
+    }
+
+    #[test]
+    fn qs256_uses_ntt_path() {
+        let params = Params::from_security_level(SecurityLevel::QS256);
+        assert_eq!(params.ring_dim, 256);
+        assert!(uses_ntt_mul(params.ring_dim));
+    }
+
+    #[test]
+    fn qs192_uses_ntt_256() {
+        // QS192 also uses N=256 ring (NTT-256), not schoolbook.
+        let params = Params::from_security_level(SecurityLevel::QS192);
+        assert_eq!(params.ring_dim, 256);
+        assert!(uses_ntt_mul(params.ring_dim));
+    }
+
+    #[test]
+    fn ntt128_poly_mul_matches_schoolbook() {
+        // Correctness: poly_mul (NTT path via uses_ntt_mul) agrees with schoolbook.
+        // Path activation is guaranteed by uses_ntt_mul being the poly_mul gate;
+        // see also Criterion poly_mul_n128 timing vs schoolbook.
+        let n = 128usize;
+        assert!(
+            uses_ntt_mul(n),
+            "test precondition: N=128 must select NTT in poly_mul"
+        );
+        let mut a_coeffs = vec![0u16; n];
+        let mut b_coeffs = vec![0u16; n];
+        for i in 0..n {
+            a_coeffs[i] = ((i * 17 + 3) % FIELD_MODULUS as usize) as u16;
+            b_coeffs[i] = ((i * 41 + 11) % FIELD_MODULUS as usize) as u16;
+        }
+        let a = Poly::from_coeffs(a_coeffs);
+        let b = Poly::from_coeffs(b_coeffs);
+        let ntt_prod = poly_mul(&a, &b);
+        let sb_prod = schoolbook_poly_mul(&a, &b);
+        assert_eq!(
+            ntt_prod.coeffs, sb_prod.coeffs,
+            "NTT-128 poly_mul diverged from schoolbook"
+        );
+    }
+
+    #[test]
+    fn ntt128_poly_mul_random_vectors_match_schoolbook() {
+        let n = 128usize;
+        assert!(uses_ntt_mul(n));
+        // A few more patterns including sparse / one / zero-ish cases.
+        let cases: Vec<(Vec<u16>, Vec<u16>)> = vec![
+            (vec![1u16; n], vec![1u16; n]),
+            (
+                {
+                    let mut v = vec![0u16; n];
+                    v[0] = 1;
+                    v
+                },
+                {
+                    let mut v = vec![0u16; n];
+                    v[1] = 1;
+                    v
+                },
+            ),
+            (
+                (0..n).map(|i| (i as u16 * 7) % FIELD_MODULUS).collect(),
+                (0..n)
+                    .map(|i| ((i as u16).wrapping_mul(13) + 5) % FIELD_MODULUS)
+                    .collect(),
+            ),
+        ];
+        for (a_c, b_c) in cases {
+            let a = Poly::from_coeffs(a_c);
+            let b = Poly::from_coeffs(b_c);
+            assert_eq!(poly_mul(&a, &b).coeffs, schoolbook_poly_mul(&a, &b).coeffs);
+        }
+    }
+
+    #[test]
+    fn non_ntt_dimension_does_not_claim_ntt() {
+        assert!(!uses_ntt_mul(64));
+        assert!(!uses_ntt_mul(192));
+        assert!(!uses_ntt_mul(0));
+    }
 }

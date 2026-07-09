@@ -1,0 +1,2 @@
+=== TestU01 BigCrush — QS-Crypto SpinPrng (stdin stream) ===
+

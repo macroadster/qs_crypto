@@ -437,4 +437,64 @@ mod tests {
             assert_eq!(result_u16[i], a[i] as u16, "mul-by-1 mismatch at [{}]", i);
         }
     }
+
+    #[test]
+    fn ntt128_roundtrip_basis() {
+        for idx in [0usize, 1, 7, 63, 127] {
+            let mut r = [0i32; N128];
+            r[idx] = 1;
+            let orig = r;
+            ntt_128(&mut r);
+            inv_ntt_128(&mut r);
+            for i in 0..N128 {
+                assert_eq!(
+                    r[i], orig[i],
+                    "NTT-128 roundtrip mismatch at basis e_{}[{}]: got {}, want {}",
+                    idx, i, r[i], orig[i]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ntt128_mul_by_one() {
+        let mut a = [0i32; N128];
+        for i in 0..N128 {
+            a[i] = (i as i32 * 17 + 42) % Q;
+        }
+        let mut one = [0i32; N128];
+        one[0] = 1;
+        let result = ntt_mul_128(&a, &one);
+        for i in 0..N128 {
+            assert_eq!(result[i], a[i], "NTT-128 mul-by-1 mismatch at [{}]", i);
+        }
+    }
+
+    #[test]
+    fn ntt128_mul_matches_schoolbook_ring() {
+        // Direct NTT-128 vs naive schoolbook in this module (independent of poly_mul dispatch).
+        let mut a = [0i32; N128];
+        let mut b = [0i32; N128];
+        for i in 0..N128 {
+            a[i] = ((i * 19 + 5) % Q as usize) as i32;
+            b[i] = ((i * 23 + 9) % Q as usize) as i32;
+        }
+        let ntt_res = ntt_mul_128(&a, &b);
+
+        let mut temp = vec![0i64; 2 * N128];
+        for i in 0..N128 {
+            for j in 0..N128 {
+                temp[i + j] += a[i] as i64 * b[j] as i64;
+            }
+        }
+        for k in 0..N128 {
+            let val = temp[k] - temp[k + N128];
+            let sb = barrett_reduce_signed(val);
+            assert_eq!(
+                ntt_res[k], sb,
+                "NTT-128 vs schoolbook mismatch at [{}]: ntt={}, sb={}",
+                k, ntt_res[k], sb
+            );
+        }
+    }
 }

@@ -31,7 +31,7 @@ pub fn barrett_reduce_signed(a: i64) -> i32 {
     d + ((d >> 31) & Q) // subtract Q if r >= Q
 }
 
-// ── Unsigned Barrett (lattice engine, polynomial arithmetic) ───────
+// ── Unsigned Barrett (lattice engine, polynomial arithmetic) ────────
 
 /// Barrett reduce an unsigned u64 value to `[0, Q)`.
 ///
@@ -62,6 +62,48 @@ pub fn barrett_reduce_unsigned(a: u64) -> u16 {
     (d + ((d >> 31) & Q)) as u16
 }
 
+/// Fast Barrett reduce for values with `a < 2^32` (lattice products / small sums).
+///
+/// Avoids the u128 path used by [`barrett_reduce_unsigned`].  Constant-time
+/// with respect to the value of `a` (fixed arithmetic + mask normalize).
+///
+/// # Panics
+/// Debug-only assert if `a >= 2^32` (caller must uphold the bound).
+#[inline(always)]
+pub fn barrett_reduce_u32(a: u64) -> u16 {
+    debug_assert!(a < (1u64 << 32));
+    const Q64: u64 = 3329;
+    // V = floor(2^32 / Q).  For a < 2^32, t = (a * V) >> 32 approximates a/Q
+    // with error in {0, 1}, so r ∈ [0, 2Q).
+    const V: u64 = (1u64 << 32) / Q64;
+    let t = (a * V) >> 32;
+    let mut r = (a - t * Q64) as i32;
+    r += (r >> 31) & Q;
+    let d = r - Q;
+    (d + ((d >> 31) & Q)) as u16
+}
+
+// ── Fast Barrett for bounded inputs (lattice fast-path) ────────────
+
+/// Barrett reduce a value known to be `< 2^27` to `[0, Q)`.
+///
+/// Uses a single 64-bit multiply (no u128) and one conditional subtract.
+/// **Panics in debug mode** if `a ≥ 2^27`.
+///
+/// Correctness proof sketch: V = floor(2^28 / Q) = 80603.
+/// For a < 2^27, the quotient estimate error `a·ε / 2^28 < 2^27 / 2^28 = 0.5 < 1`,
+/// so the estimate undershoots by at most 1, giving `r ∈ [0, 2Q)`.
+/// One conditional subtract normalizes to `[0, Q)`.
+#[inline(always)]
+pub fn barrett_reduce_small(a: u32) -> u16 {
+    debug_assert!(a < (1 << 27), "barrett_reduce_small: a={a} >= 2^27");
+    const V: u64 = (1u64 << 28) / 3329; // = 80603
+    let t = ((a as u64 * V) >> 28) as u32;
+    let r = (a - t * 3329) as i32;
+    let d = r - Q;
+    (d + ((d >> 31) & Q)) as u16
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -78,6 +120,23 @@ mod tests {
         for &a in &[0i64, 1, 3328, 3329, -3329, 3328 * 3328, -(3328 * 3328)] {
             let expected = a.rem_euclid(Q as i64) as i32;
             assert_eq!(barrett_reduce_signed(a), expected, "boundary a={a}");
+        }
+    }
+
+    #[test]
+    fn small_matches_mod() {
+        // Exhaustive for a broad range, then spot-check near boundary
+        for a in 0u32..100_000 {
+            let expected = (a % 3329) as u16;
+            let got = barrett_reduce_small(a);
+            assert_eq!(got, expected, "small mismatch for a={a}");
+        }
+        // Near the upper boundary
+        let upper = (1u32 << 27) - 1;
+        for a in (upper - 10000)..=upper {
+            let expected = (a % 3329) as u16;
+            let got = barrett_reduce_small(a);
+            assert_eq!(got, expected, "small boundary mismatch for a={a}");
         }
     }
 
@@ -102,6 +161,33 @@ mod tests {
             let expected = (a % Q as u64) as u16;
             let got = barrett_reduce_unsigned(a);
             assert_eq!(got, expected, "unsigned mismatch for a={a}");
+        }
+    }
+
+    #[test]
+    fn u32_path_matches_mod() {
+        for a in [0u64, 1, 3328, 3329, 3330, 10_000, 3328 * 3328, 66_453_504, u32::MAX as u64] {
+            let expected = (a % Q as u64) as u16;
+            assert_eq!(barrett_reduce_u32(a), expected, "u32 path mismatch for a={a}");
+            assert_eq!(barrett_reduce_u32(a), barrett_reduce_unsigned(a));
+        }
+    }
+
+    #[test]
+    fn u32_path_exhaustive() {
+        // Exhaustive for a broad range (covers the hot-path input domain)
+        for a in 0u64..200_000 {
+            let expected = (a % Q as u64) as u16;
+            let got = barrett_reduce_u32(a);
+            assert_eq!(got, expected, "u32 exhaustive mismatch for a={a}");
+        }
+        // Boundary sweep near 2^32 - 1
+        let upper = u32::MAX as u64;
+        for a in (upper - 10000)..=upper {
+            let expected = (a % Q as u64) as u16;
+            let got = barrett_reduce_u32(a);
+            assert_eq!(got, expected, "u32 boundary mismatch for a={a}");
+            assert_eq!(got, barrett_reduce_unsigned(a), "u32 vs unsigned mismatch for a={a}");
         }
     }
 }

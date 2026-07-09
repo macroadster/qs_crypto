@@ -20,5 +20,5 @@ mod ntt;
 pub use decaps::decapsulate;
 pub use encaps::{encapsulate, encapsulate_deterministic};
 pub use keygen::{generate_keypair, generate_keypair_deterministic};
-pub use ring::{poly_mul, schoolbook_poly_mul, Poly};
+pub use ring::{poly_mul, schoolbook_poly_mul, uses_ntt_mul, Poly};
 pub use types::*;

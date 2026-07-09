@@ -66,5 +66,15 @@ BigCrush includes (among others):
 
 - [x] C wrapper created (`scripts/testu01/bigcrush_wrapper.c`)
 - [x] Stream generation command documented
-- [ ] 1 GiB stream generation: run as needed (takes ~40 min at 0.4 MiB/s)
-- [ ] BigCrush execution: awaiting TestU01 installation (~4 hours runtime)
+- [ ] 1 GiB stream generation: not run on implementation host (large artifact; run when TestU01 is available)
+- [ ] BigCrush execution: **blocked** — TestU01 libraries not installed (`libtestu01` absent under `/usr/local/lib`)
+
+### Attempt log (2026-06-30)
+
+| Check | Result |
+|-------|--------|
+| TestU01 headers/libs | not found |
+| `bigcrush_wrapper` binary | not built (depends on TestU01) |
+| 1 GiB stream | not generated (blocked on runner time / tool availability) |
+
+No BigCrush pass/fail results are recorded. Infrastructure and commands remain ready for a machine with TestU01 installed.

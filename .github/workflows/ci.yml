@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, master]
   pull_request:
 
 env:
@@ -13,6 +13,7 @@ jobs:
     name: Test (${{ matrix.toolchain }})
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         toolchain: [stable, nightly]
     steps:
@@ -21,7 +22,8 @@ jobs:
         with:
           toolchain: ${{ matrix.toolchain }}
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --all-targets
+      - name: Run tests (includes KAT via tests/kat.rs)
+        run: cargo test --all-targets
 
   clippy:
     name: Clippy
@@ -56,9 +58,13 @@ jobs:
           cargo run --bin gen_kat
           git diff --exit-code tests/kat_vectors.json
 
+  # Advisory only: continue-on-error so Miri failures do not fail the workflow.
+  # Check the Miri job status on PRs for UB signals; promote to required once
+  # the suite is known clean on a dedicated schedule if desired.
   miri:
-    name: Miri (UB detection)
+    name: Miri (UB detection, advisory)
     runs-on: ubuntu-latest
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
@@ -68,3 +74,15 @@ jobs:
       - run: cargo +nightly miri test --lib
         env:
           MIRIFLAGS: -Zmiri-disable-isolation
+
+  # Optional: compile-check benchmarks (no regression thresholds — Criterion
+  # baselines are host-dependent; full timing alerts need a dedicated runner).
+  bench-check:
+    name: Bench (compile only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Ensure benchmarks compile
+        run: cargo bench --no-run

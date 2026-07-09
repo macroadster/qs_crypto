@@ -31,8 +31,20 @@ impl SpinPrng {
     }
 
     /// Generate `num_bytes` of pseudorandom output.
+    ///
+    /// Uses the high-throughput streaming squeeze path. The output is
+    /// public by definition (it *is* the random stream), so no
+    /// constant-time barriers are needed.
     pub fn next_bytes(&mut self, num_bytes: usize) -> Vec<u8> {
-        self.sponge.squeeze(num_bytes)
+        self.sponge.squeeze_streaming(num_bytes)
+    }
+
+    /// Fill `buf` with pseudorandom bytes (no allocation).
+    ///
+    /// Uses the high-throughput streaming squeeze path — same as
+    /// [`next_bytes`] but writes directly into the caller's buffer.
+    pub fn fill_bytes(&mut self, buf: &mut [u8]) {
+        self.sponge.squeeze_streaming_into(buf);
     }
 
     /// Mix additional entropy into the PRNG state.

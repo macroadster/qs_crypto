@@ -107,33 +107,54 @@ fn main() {
             format!("{}_{:03}.bin", output, s)
         };
 
-        println!(
+        let to_stdout = filename == "-" || filename == "/dev/stdout";
+        // Progress on stderr when streaming to stdout (keeps the byte stream clean).
+        let log = |msg: String| {
+            if to_stdout {
+                eprintln!("{}", msg);
+            } else {
+                println!("{}", msg);
+            }
+        };
+        log(format!(
             "Generating stream {} → {} ({} MiB)...",
             s, filename, megabytes
-        );
+        ));
         let start = Instant::now();
 
-        let mut file = File::create(&filename).expect("cannot create output file");
         let mut remaining = total_bytes;
         const CHUNK: usize = 1 << 20; // 1 MiB chunks
+        let mut buf = vec![0u8; CHUNK];
 
-        while remaining > 0 {
-            let want = remaining.min(CHUNK);
-            let data = prng.next_bytes(want);
-            file.write_all(&data).expect("write failed");
-            remaining -= want;
+        if to_stdout {
+            let mut out = std::io::stdout().lock();
+            while remaining > 0 {
+                let want = remaining.min(CHUNK);
+                prng.fill_bytes(&mut buf[..want]);
+                out.write_all(&buf[..want]).expect("write failed");
+                remaining -= want;
+            }
+            out.flush().unwrap();
+        } else {
+            let mut file = File::create(&filename).expect("cannot create output file");
+            while remaining > 0 {
+                let want = remaining.min(CHUNK);
+                prng.fill_bytes(&mut buf[..want]);
+                file.write_all(&buf[..want]).expect("write failed");
+                remaining -= want;
+            }
+            file.flush().unwrap();
         }
-        file.flush().unwrap();
 
         let elapsed = start.elapsed();
         let rate = (total_bytes as f64) / (1024.0 * 1024.0) / elapsed.as_secs_f64();
-        println!(
+        log(format!(
             "  Wrote {} bytes in {:.2?} ({:.1} MiB/s)\n",
             total_bytes, elapsed, rate
-        );
+        ));
 
         // Also run a quick bias check on the first 4 MiB of this stream
-        if megabytes >= 4 {
+        if megabytes >= 4 && !to_stdout {
             let mut prng2 = SpinPrng::with_params(seed.as_bytes(), &params);
             let sample = prng2.next_bytes(4 * 1024 * 1024);
             let (passed, report) = quick_bias_report(&sample);
@@ -145,11 +166,18 @@ fn main() {
         }
     }
 
-    println!("\nGeneration complete.");
-    println!("Next steps for serious validation:");
-    println!("  dieharder -a -g 201 -f <file.bin>");
-    println!("  TestU01 BigCrush (file_input generator)");
-    println!("  NIST Statistical Test Suite");
+    let done = |msg: &str| {
+        if output == "-" || output == "/dev/stdout" {
+            eprintln!("{}", msg);
+        } else {
+            println!("{}", msg);
+        }
+    };
+    done("\nGeneration complete.");
+    done("Next steps for serious validation:");
+    done("  dieharder -a -g 201 -f <file.bin>");
+    done("  TestU01 BigCrush (file_input generator)");
+    done("  NIST Statistical Test Suite");
 }
 
 fn print_help() {
@@ -435,11 +463,17 @@ fn dump_raw_spin_states(count: usize, rounds: usize) {
 /// For each input differential weight w (1-spin through max_weight-spin):
 ///   - Apply differentials to a random base state
 ///   - Run R rounds (varying R from 1 to the full permutation round count)
-///   - Measure the output differential weight distribution
-///   - Compute the maximum differential probability max_r DP(r)
+///   - Measure the output differential weight distribution (avalanche)
+///   - Measure per-position identity rates (true position-wise metric)
 ///
-/// This validates that differential probability decays exponentially
-/// with round count.
+/// **Metric note (v0.3 investigation):** An earlier report column labeled
+/// "Max DP (per spin)" was actually the **mode probability of the output
+/// differential weight histogram** — i.e. `max_w Pr[wt(Δ_out) = w]`. Under
+/// full avalanche that concentrates near weight ≈ N, so the value plateaus
+/// near ~0.9. That is *not* classical differential probability and does not
+/// indicate a truncated-differential attack. The corrected report reports
+/// both the weight-mode probability (correctly labeled) and the max
+/// per-position identity rate `max_i Pr[out_i unchanged]`.
 fn run_differential_cryptanalysis(trials: usize, max_weight: usize) {
     let params = Params::default();
     let n = params.total_spins; // 256 for QS-256
@@ -450,6 +484,15 @@ fn run_differential_cryptanalysis(trials: usize, max_weight: usize) {
     println!("Parameters: N={}, q={}, full_rounds={}", n, q, full_rounds);
     println!("Trials per (weight, round): {}", trials);
     println!("Input differential weights: 1..{}\n", max_weight);
+    println!(
+        "Metrics:\n  \
+         - Mode weight Pr: max_w Pr[Hamming wt of output Δ = w]\n  \
+         - Max id rate:    max_i Pr[output spin i unchanged] (elevated vs 1/q by max-over-N)\n  \
+         - Mean id rate:   mean_i Pr[output spin i unchanged] (compare to 1/q ≈ {:.6})\n  \
+         (Per-position ideal under uniform mixing: 1/q; max over N={} positions sits higher under H0)\n",
+        1.0 / q as f64,
+        n
+    );
 
     // Round counts to test: 1, 2, 4, 8, 12, 16, 20, 24, 28, 32
     let round_counts: Vec<usize> = {
@@ -459,7 +502,7 @@ fn run_differential_cryptanalysis(trials: usize, max_weight: usize) {
             v.push(r);
             r += 4;
         }
-        if *v.last().unwrap() != full_rounds {
+        if *v.last().expect("round_counts non-empty") != full_rounds {
             v.push(full_rounds);
         }
         v
@@ -473,40 +516,52 @@ fn run_differential_cryptanalysis(trials: usize, max_weight: usize) {
         chrono_lite_date(),
         n, q, full_rounds, trials
     ));
+    report_lines.push(
+        "## Metric definitions\n\n\
+         | Column | Meaning |\n\
+         |--------|----------|\n\
+         | Avg Output Weight | Mean Hamming weight of the output differential (number of spins that differ) |\n\
+         | Fraction Changed | Avg Output Weight / N (avalanche fraction) |\n\
+         | Mode weight Pr | `max_w Pr[wt(Δ_out) = w]` — concentration of the weight histogram |\n\
+         | Max id rate | `max_i Pr[out_i unchanged]` — worst-case over positions |\n\
+         | Mean id rate | `mean_i Pr[out_i unchanged]` — compare to ideal 1/q |\n\
+         | log2(Max id) | log₂ of Max id rate |\n\n\
+         **Max vs mean:** Under i.i.d. identity with rate p = 1/q, the **maximum** over \
+         N positions is stochastically larger than p (multiple-testing). Mean id rate is \
+         the direct estimator of p; Max id rate is a conservative worst-case probe.\n\n\
+         **Historical note:** Earlier revisions labeled the mode-weight probability as \
+         \"Max DP (per spin)\". That was incorrect: under full avalanche the weight \
+         concentrates near N, so mode-weight Pr plateaus near ~0.9 even for an ideal \
+         random permutation. That plateau is *not* evidence of high-probability \
+         truncated differentials. Classical DP(Δ_in → Δ_out) for a specific nonzero \
+         output difference cannot be measured at 2⁻¹²⁸ resolution with feasible trials.\n"
+            .to_string(),
+    );
 
     for weight in 1..=max_weight {
         println!("--- Input differential weight: {} spin(s) ---\n", weight);
         report_lines.push(format!("## Weight-{} Differentials\n", weight));
-        report_lines.push("| Rounds | Avg Output Weight (spins) | Fraction Changed | Max DP (per spin) | log2(Max DP) |".to_string());
-        report_lines.push("|--------|--------------------------|------------------|-------------------|--------------|".to_string());
+        report_lines.push(
+            "| Rounds | Avg Output Weight (spins) | Fraction Changed | Mode weight Pr | Max id rate | Mean id rate | log2(Max id) |".to_string(),
+        );
+        report_lines.push(
+            "|--------|--------------------------|------------------|----------------|-------------|--------------|--------------|".to_string(),
+        );
 
         println!(
-            "{:<8} {:<28} {:<20} {:<20} {}",
-            "Rounds", "Avg Output Weight", "Fraction", "Max DP", "log2(Max DP)"
+            "{:<8} {:<18} {:<12} {:<14} {:<12} {:<12} {}",
+            "Rounds", "Avg Weight", "Fraction", "Mode wt Pr", "Max id", "Mean id", "log2(Max id)"
         );
 
         for &rounds in &round_counts {
             let mut total_output_weight: u64 = 0;
-            let mut output_weight_counts = vec![0u64; n + 1]; // histogram
+            let mut output_weight_counts = vec![0u64; n + 1]; // histogram of Hamming weights
+            let mut identity_counts = vec![0u64; n]; // per-position unchanged counts
 
             for trial in 0..trials {
-                // Random base state
-                let mut base = SpinLattice::new(&params);
-                base.seed_from_bytes(format!("diff-w{}-r{}-t{}", weight, rounds, trial).as_bytes());
-                base.run(rounds);
-
-                // Create perturbed copy: flip `weight` spins by +1
-                let mut perturbed = base.clone();
-                let mut spins = perturbed.spins().to_vec();
-                for w in 0..weight {
-                    let idx = ((trial * 37) + w * 97) % n;
-                    spins[idx] = (spins[idx] + 1) % q;
-                }
-                perturbed.set_spins(&spins);
-
-                // Re-seed base and run from the same starting point
-                // Actually we need both to start from the SAME state,
-                // then one gets the differential applied, then both run.
+                // Both lattices start from the same seeded state; one gets
+                // a weight-w input differential on distinct random supports
+                // (trial-seeded, reproducible), then both run.
                 let mut base2 = SpinLattice::new(&params);
                 base2.seed_from_bytes(
                     format!("diff-base-w{}-r{}-t{}", weight, rounds, trial).as_bytes(),
@@ -514,8 +569,8 @@ fn run_differential_cryptanalysis(trials: usize, max_weight: usize) {
 
                 let mut pert2 = base2.clone();
                 let mut pert_spins = pert2.spins().to_vec();
-                for w in 0..weight {
-                    let idx = ((trial * 37) + w * 97) % n;
+                let idxs = differential_support_indices(trial, weight, n);
+                for &idx in &idxs {
                     pert_spins[idx] = (pert_spins[idx] + 1) % q;
                 }
                 pert2.set_spins(&pert_spins);
@@ -523,13 +578,14 @@ fn run_differential_cryptanalysis(trials: usize, max_weight: usize) {
                 base2.run(rounds);
                 pert2.run(rounds);
 
-                // Count differing output spins
                 let s1 = base2.spins();
                 let s2 = pert2.spins();
                 let mut diff_count = 0usize;
                 for i in 0..n {
                     if s1[i] != s2[i] {
                         diff_count += 1;
+                    } else {
+                        identity_counts[i] += 1;
                     }
                 }
                 total_output_weight += diff_count as u64;
@@ -539,55 +595,111 @@ fn run_differential_cryptanalysis(trials: usize, max_weight: usize) {
             let avg_weight = total_output_weight as f64 / trials as f64;
             let fraction = avg_weight / n as f64;
 
-            // Max differential probability: the most common output weight,
-            // normalized. This is a conservative upper bound on the maximum
-            // differential probability per output position.
-            let max_count = *output_weight_counts.iter().max().unwrap();
-            let max_dp = max_count as f64 / trials as f64;
-            let log2_dp = if max_dp > 0.0 {
-                max_dp.log2()
+            // Mode probability of the output differential *weight* (not DP).
+            let max_weight_count = *output_weight_counts
+                .iter()
+                .max()
+                .expect("weight histogram non-empty");
+            let mode_weight_pr = max_weight_count as f64 / trials as f64;
+
+            // Max / mean per-position identity rates.
+            let max_id_count = *identity_counts
+                .iter()
+                .max()
+                .expect("identity_counts non-empty");
+            let max_id_rate = max_id_count as f64 / trials as f64;
+            let mean_id_rate =
+                identity_counts.iter().sum::<u64>() as f64 / (trials as f64 * n as f64);
+            let log2_id_str = if max_id_rate > 0.0 {
+                format!("{:.1}", max_id_rate.log2())
             } else {
-                f64::NEG_INFINITY
+                // Below measurement resolution: all positions changed every trial.
+                format!("< -{:.1}", (trials as f64).log2())
             };
 
             println!(
-                "{:<8} {:<28.2} {:<20.4} {:<20.6} {:.1}",
-                rounds, avg_weight, fraction, max_dp, log2_dp
+                "{:<8} {:<18.2} {:<12.4} {:<14.6} {:<12.6} {:<12.6} {}",
+                rounds,
+                avg_weight,
+                fraction,
+                mode_weight_pr,
+                max_id_rate,
+                mean_id_rate,
+                log2_id_str
             );
 
             report_lines.push(format!(
-                "| {} | {:.2} | {:.4} | {:.6} | {:.1} |",
-                rounds, avg_weight, fraction, max_dp, log2_dp
+                "| {} | {:.2} | {:.4} | {:.6} | {:.6} | {:.6} | {} |",
+                rounds,
+                avg_weight,
+                fraction,
+                mode_weight_pr,
+                max_id_rate,
+                mean_id_rate,
+                log2_id_str
             ));
         }
         println!();
         report_lines.push(String::new());
     }
 
-    // Analyze: check if DP drops below 2^{-128} at full rounds
-    // At full diffusion, every trial should show ~N/2 different spins,
-    // so the weight histogram should be tightly concentrated around N/2,
-    // meaning max_dp ≈ 1/trials (all outcomes distinct).
     report_lines.push("## Analysis\n".to_string());
-    report_lines.push("For a secure permutation, we expect:".to_string());
-    report_lines
-        .push("- Output differential weight concentrates near N/2 at full rounds".to_string());
-    report_lines.push("- DP decreases exponentially with round count".to_string());
+    report_lines.push("### Finding: the ~0.92 plateau was a mislabeled metric\n".to_string());
+    report_lines.push(
+        "The previous report's \"Max DP (per spin) ≈ 0.92 at 32 rounds\" measured \
+         **mode weight probability** (how often the Hamming weight of Δ_out takes its \
+         most common value), not per-position differential probability. Once avalanche \
+         is essentially complete (fraction changed ≈ 0.9997), nearly every trial has \
+         wt(Δ_out) ∈ {255, 256}, so the mode probability naturally sits near ~0.9. \
+         An ideal random permutation over ℤ_q^N would show the same plateau.\n"
+            .to_string(),
+    );
+    report_lines.push("### Corrected expectations\n".to_string());
+    report_lines.push("For a secure permutation we expect:".to_string());
     report_lines.push(format!(
-        "- At {} rounds, near-perfect avalanche (fraction ≈ 1.0) indicates\n  the maximum differential probability per position is negligible",
-        full_rounds
+        "- Avalanche: fraction changed → 1 − 1/q ≈ {:.6} (here q = {})",
+        1.0 - 1.0 / q as f64,
+        q
+    ));
+    report_lines.push(format!(
+        "- **Mean** per-position identity rate → 1/q ≈ {:.6} (direct estimator of p)",
+        1.0 / q as f64
+    ));
+    report_lines.push(format!(
+        "- **Max** identity rate over N={} positions is elevated vs 1/q under H0 \
+         (multiple-testing); with {} trials the single-cell floor is 1/{} ≈ {:.6}, \
+         so observed max around a few × 1/T remains consistent with random mixing",
+        n,
+        trials,
+        trials,
+        1.0 / trials as f64
+    ));
+    report_lines.push(
+        "- Mode weight Pr stays O(1) under full avalanche (not a security failure)".to_string(),
+    );
+    report_lines.push(format!(
+        "- At {} rounds, near-perfect avalanche plus mean id rate near 1/q supports \
+         that position-wise differentials are consistent with random mixing within \
+         measurement resolution (~2^{{{:.1}}})",
+        full_rounds,
+        -(trials as f64).log2()
     ));
     report_lines.push(String::new());
+    report_lines.push("### Impact on security claims\n".to_string());
+    report_lines.push(
+        "No evidence of high-probability truncated differentials was found once the \
+         metric is interpreted correctly. Security claims based on avalanche / diffusion \
+         of the SpinLattice permutation are **unaffected**. Classical DP < 2⁻¹²⁸ cannot \
+         be established empirically with feasible trial counts; the corrected metrics \
+         only confirm diffusion within Monte-Carlo resolution.\n"
+            .to_string(),
+    );
     report_lines.push(format!(
-        "**Note:** With {} trials, the measured DP resolution is ~2^{:.1}.\n\
-         To empirically verify DP < 2^{{-128}}, an astronomically large number of\n\
-         trials would be required. Instead, the exponential decay trend across\n\
-         rounds, combined with full-avalanche behavior at {} rounds, provides\n\
-         strong evidence that the differential probability is negligible at the\n\
-         designed round count.",
+        "**Note:** With {} trials, identity-rate resolution is ~2^{{{:.1}}}. \
+         Empirically verifying DP < 2^{{-128}} for a specific differential characteristic \
+         would require an astronomically large number of trials.",
         trials,
         -(trials as f64).log2(),
-        full_rounds,
     ));
 
     // Write report
@@ -595,6 +707,42 @@ fn run_differential_cryptanalysis(trials: usize, max_weight: usize) {
     fs::create_dir_all("benches/reports/v0.3").ok();
     fs::write(report_path, report_lines.join("\n")).expect("failed to write differential report");
     println!("Report written to {}", report_path);
+}
+
+/// Distinct support indices for a weight-w input differential.
+///
+/// Trial-seeded LCG sampling (reproducible, not a fixed lattice in trial×weight
+/// space) so sparse position-tied truncated differentials are less likely to be
+/// systematically missed than a pure arithmetic progression of indices.
+fn differential_support_indices(trial: usize, weight: usize, n: usize) -> Vec<usize> {
+    let mut idxs = Vec::with_capacity(weight);
+    let mut state = (trial as u64)
+        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        .wrapping_add(weight as u64);
+    let mut guard = 0usize;
+    while idxs.len() < weight {
+        state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1);
+        let idx = ((state >> 33) as usize) % n;
+        if !idxs.contains(&idx) {
+            idxs.push(idx);
+        }
+        guard += 1;
+        // Pathological collision guard (weight << n in all planned uses).
+        if guard > n * 4 {
+            for i in 0..n {
+                if idxs.len() >= weight {
+                    break;
+                }
+                if !idxs.contains(&i) {
+                    idxs.push(i);
+                }
+            }
+            break;
+        }
+    }
+    idxs
 }
 
 /// Simple date string without pulling in chrono.

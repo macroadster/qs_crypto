@@ -95,31 +95,50 @@ impl SpinSponge {
         self.lattice.run(self.rounds);
     }
 
+    /// Fast permutation for public-output paths (no `black_box` barriers).
+    /// See [`SpinLattice::run_fast`].
+    pub fn permute_fast(&mut self) {
+        self.lattice.run_fast(self.rounds);
+    }
+
     /// Squeeze `num_bytes` of output from the rate region.
     ///
     /// This implementation uses **frequent permutation during long squeezes**
-    /// (mini-blocks of 16 bytes) + strong 64-bit mixing. This produces
+    /// (mini-blocks of 48 bytes) + strong 64-bit mixing. This produces
     /// high-quality uniform byte streams with low autocorrelation while
     /// still benefiting from the excellent diffusion of the SpinLattice
     /// round function.
     pub fn squeeze(&mut self, num_bytes: usize) -> Vec<u8> {
-        let mut output = Vec::with_capacity(num_bytes);
+        let mut output = vec![0u8; num_bytes];
+        self.squeeze_into(&mut output);
+        output
+    }
+
+    /// Squeeze into an existing buffer (avoids allocation for high-throughput
+    /// streaming such as statistical test suites).
+    pub fn squeeze_into(&mut self, output: &mut [u8]) {
         const MINI_BLOCK: usize = 48; // More frequent mixing for better autocorrelation on long streams
+        // Max sponge rate across parameter sets is 64 (QS-192/256); stack buffer.
+        let mut rate_spins = [0u16; 64];
+        assert!(self.rate <= rate_spins.len(), "sponge rate {} exceeds stack buffer size 64", self.rate);
 
+        let mut pos = 0usize;
         let mut bytes_since_permute = 0usize;
+        let n = output.len();
 
-        while output.len() < num_bytes {
-            // Copy the current rate so we can safely permute mid-block
-            let rate_spins: Vec<u16> = self.lattice.spins()[..self.rate].to_vec();
+        while pos < n {
+            let spins = self.lattice.spins();
+            rate_spins[..self.rate].copy_from_slice(&spins[..self.rate]);
+            let rate = self.rate;
 
-            for i in 0..self.rate {
-                if output.len() >= num_bytes {
+            for i in 0..rate {
+                if pos >= n {
                     break;
                 }
 
                 let s0 = rate_spins[i] as u64;
-                let s1 = rate_spins[(i + 7) % self.rate] as u64;
-                let s2 = rate_spins[(i + 19) % self.rate] as u64;
+                let s1 = rate_spins[(i + 7) % rate] as u64;
+                let s2 = rate_spins[(i + 19) % rate] as u64;
 
                 // Strong 64-bit mixer
                 let mut w = s0 ^ (s1 << 21) ^ (s2 << 42);
@@ -130,27 +149,111 @@ impl SpinSponge {
                 w ^= w >> 29;
 
                 for k in 0..4 {
-                    if output.len() >= num_bytes {
+                    if pos >= n {
                         break;
                     }
-                    output.push(((w >> (k * 8)) & 0xFF) as u8);
+                    output[pos] = ((w >> (k * 8)) & 0xFF) as u8;
+                    pos += 1;
                     bytes_since_permute += 1;
 
                     if bytes_since_permute >= MINI_BLOCK {
                         self.permute();
                         bytes_since_permute = 0;
+                        // After mid-block permute, remaining rate spins from the
+                        // snapshot are stale; re-snapshot and continue from next i.
+                        // Match prior behaviour: permute only resets mixing counter;
+                        // the snapshot for this outer pass is unchanged (same as the
+                        // old to_vec() + in-loop permute path).
                     }
                 }
             }
 
-            if output.len() < num_bytes {
+            if pos < n {
                 self.permute();
                 bytes_since_permute = 0;
             }
         }
+    }
 
-        output.truncate(num_bytes);
+    /// High-throughput squeeze for streaming / PRNG output.
+    ///
+    /// Uses a **CTR-mode expansion** seeded from sponge state: one
+    /// permutation seeds a batch of 64-bit SplitMix-style output words
+    /// indexed by a counter, then re-keys with a fresh permutation.
+    /// Permutations use [`permute_fast`] (no `black_box` barriers) since
+    /// the output is public.
+    ///
+    /// The re-keying interval (`REKEY_WORDS`) controls the ratio of cheap
+    /// mixer iterations to expensive permutations. At 4096 words (32 KiB)
+    /// per permutation, throughput is dominated by the mixer.
+    pub fn squeeze_streaming(&mut self, num_bytes: usize) -> Vec<u8> {
+        let mut output = vec![0u8; num_bytes];
+        self.squeeze_streaming_into(&mut output);
         output
+    }
+
+    /// High-throughput squeeze directly into a caller-supplied buffer
+    /// (avoids allocation). See [`squeeze_streaming`] for details.
+    pub fn squeeze_streaming_into(&mut self, output: &mut [u8]) {
+        let rate = self.rate;
+        // How many 64-bit words to expand per sponge permutation.
+        // 4096 words = 32 KiB per permutation. This keeps the sponge
+        // state dependency chain tight while amortizing the expensive
+        // lattice permutation over many cheap mixer evaluations.
+        const REKEY_WORDS: usize = 4096;
+
+        let num_bytes = output.len();
+        let mut pos = 0usize;
+
+        while pos < num_bytes {
+            // Extract two 64-bit keys from the sponge rate region for
+            // the CTR-mode expansion.
+            let spins = &self.lattice.spins()[..rate];
+
+            // Build two independent 64-bit keys from the rate spins
+            // (folding all rate spins into the keys for full diffusion).
+            let mut key0: u64 = 0;
+            let mut key1: u64 = 0;
+            for i in 0..rate {
+                let s = spins[i] as u64;
+                key0 ^= s.wrapping_mul(0x9e3779b97f4a7c15_u64.wrapping_add((i as u64).wrapping_mul(0x517cc1b727220a95)));
+                key1 ^= s.wrapping_mul(0x6c62272e07bb0142_u64.wrapping_add((i as u64).wrapping_mul(0x6b2b82d7cf4da4a1)));
+            }
+
+            // CTR-mode expansion: for each counter value, mix (key0, key1, ctr)
+            // using a strong bijective function.
+            let remaining_words = (num_bytes - pos + 7) / 8;
+            let words_this_round = remaining_words.min(REKEY_WORDS);
+
+            for ctr in 0..words_this_round {
+                // Combine keys with counter; key1 is mixed in a
+                // counter-dependent way so both keys contribute
+                // different bits per word.
+                let mut w = key0 ^ (ctr as u64).wrapping_mul(0x9e3779b97f4a7c15);
+                w ^= key1.rotate_left((ctr as u32) & 63);
+                // Stafford variant 13 (used by SplitMix64)
+                w ^= w >> 30;
+                w = w.wrapping_mul(0xbf58476d1ce4e5b9);
+                w ^= w >> 27;
+                w = w.wrapping_mul(0x94d049bb133111eb);
+                w ^= w >> 31;
+
+                let remaining = num_bytes - pos;
+                if remaining >= 8 {
+                    output[pos..pos + 8].copy_from_slice(&w.to_le_bytes());
+                    pos += 8;
+                } else {
+                    let bytes = w.to_le_bytes();
+                    output[pos..pos + remaining].copy_from_slice(&bytes[..remaining]);
+                    pos += remaining;
+                    break;
+                }
+            }
+
+            if pos < num_bytes {
+                self.permute_fast();
+            }
+        }
     }
 
     /// Squeeze `num_bytes` of output using standard sponge extraction.

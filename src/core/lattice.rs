@@ -11,7 +11,7 @@
 //!   σ_i'     = (h_eff(i) + σ_i + rc_i)³     (mod q)
 //! ```
 
-use crate::core::reduce::barrett_reduce_unsigned;
+use crate::core::reduce::{barrett_reduce_small, barrett_reduce_unsigned};
 use crate::params::Params;
 use core::hint::black_box;
 use zeroize::Zeroize;
@@ -66,12 +66,21 @@ pub struct SpinLattice {
     /// Coupling constants for each edge in the triangular lattice.
     /// Stored as adjacency list: for each spin i, its 6 neighbour couplings.
     couplings: Vec<u16>,
+    /// Pre-computed flat neighbor indices for each spin, avoiding
+    /// repeated `triangular_neighbors` + coordinate→index math per step.
+    neighbor_indices: Vec<[usize; NUM_NEIGHBORS]>,
+    /// Pre-computed round constants `barrett_reduce((i * 2654435761) mod 2^64)`.
+    round_constants: Vec<u16>,
+    /// Scratch buffer reused across `step()`/`step_fast()` calls to
+    /// avoid allocating a new `Vec<u16>` on every synchronous update.
+    scratch: Vec<u16>,
 }
 
 impl Zeroize for SpinLattice {
     fn zeroize(&mut self) {
         self.spins.zeroize();
         self.couplings.zeroize();
+        self.scratch.zeroize();
     }
 }
 
@@ -81,11 +90,29 @@ impl SpinLattice {
     pub fn new(params: &Params) -> Self {
         let n = params.lattice_side;
         let total = n * n;
+        // Pre-compute flat neighbor indices once.
+        let mut neighbor_indices = Vec::with_capacity(total);
+        for i in 0..total {
+            let (r, c) = (i / n, i % n);
+            let nbrs = triangular_neighbors(r, c, n);
+            let mut flat = [0usize; NUM_NEIGHBORS];
+            for (k, &(nr, nc)) in nbrs.iter().enumerate() {
+                flat[k] = nr * n + nc;
+            }
+            neighbor_indices.push(flat);
+        }
+        // Pre-compute round constants: barrett_reduce_unsigned((i as u64) * 2654435761)
+        let round_constants: Vec<u16> = (0..total)
+            .map(|i| barrett_reduce_unsigned((i as u64).wrapping_mul(2654435761)))
+            .collect();
         Self {
             n,
             q: params.q,
             spins: vec![0; total],
             couplings: vec![0; total * NUM_NEIGHBORS],
+            neighbor_indices,
+            round_constants,
+            scratch: vec![0u16; total],
         }
     }
 
@@ -146,49 +173,103 @@ impl SpinLattice {
     /// 3. S-box (nonlinearity): `σ_i' = t³  (mod q)`
     ///
     /// All updates are synchronous (computed from the previous state).
+    /// Uses `black_box` barriers to prevent compiler-driven timing leaks —
+    /// use [`step_fast`] when output is public (e.g. PRNG squeeze).
     #[inline(never)]
     pub fn step(&mut self) {
-        let n = self.n;
-        let total = n * n;
-        let mut new_spins = vec![0u16; total];
+        let total = self.n * self.n;
 
-        for (i, out) in new_spins.iter_mut().enumerate() {
-            let (r, c) = (i / n, i % n);
-            let nbrs = triangular_neighbors(r, c, n);
+        for i in 0..total {
+            let nbrs = &self.neighbor_indices[i];
 
             // Effective field: linear mixing with neighbours.
             // black_box on each accumulation step prevents the compiler from
             // reordering or vectorizing in ways that could leak secret spin values.
             let mut h_eff: u64 = 0;
-            for (k, &(nr, nc)) in nbrs.iter().enumerate() {
-                let j = nr * n + nc;
+            for k in 0..NUM_NEIGHBORS {
+                let j = nbrs[k];
                 h_eff = black_box(barrett_reduce_unsigned(
                     h_eff + self.couplings[i * NUM_NEIGHBORS + k] as u64 * self.spins[j] as u64,
                 ) as u64);
             }
 
-            // Position-dependent round constant (breaks spatial symmetry)
-            let rc = barrett_reduce_unsigned((i as u64).wrapping_mul(2654435761)) as u64;
-
-            // Mix current spin + effective field + round constant
+            // Round constant (pre-computed).
+            let rc = self.round_constants[i] as u64;
             let mixed =
-                black_box(barrett_reduce_unsigned(h_eff + self.spins[i] as u64 + rc) as u64);
+                black_box(barrett_reduce_unsigned(h_eff + self.spins[i] as u64 + rc)) as u64;
 
-            // Nonlinear S-box: cubing in Z_q (a permutation since gcd(3, q-1)=1)
-            // black_box prevents the compiler from using the secret value for
+            // Nonlinear S-box: cubing in Z_q (a permutation since gcd(3, q-1)=1).
+            // black_box around each intermediate prevents the compiler from fusing
             // branch prediction or algebraic simplifications that could leak timing.
             let sq = barrett_reduce_unsigned(black_box(mixed) * black_box(mixed)) as u64;
             let cube = barrett_reduce_unsigned(black_box(sq) * black_box(mixed)) as u64;
-            *out = black_box(cube) as u16;
+            self.scratch[i] = black_box(cube) as u16;
         }
 
-        self.spins = new_spins;
+        std::mem::swap(&mut self.spins, &mut self.scratch);
     }
 
-    /// Execute `rounds` update steps.
+    /// Fast variant of [`step`] without `black_box` timing barriers.
+    ///
+    /// Produces identical mathematical results but allows the compiler
+    /// to vectorize, reorder, and fully optimize the inner loop.
+    /// **Must only be used when the lattice output is public** (e.g.
+    /// PRNG byte-stream generation), never for secret key material.
+    ///
+    /// Performance optimisations vs [`step`]:
+    /// - No `black_box` barriers → compiler can vectorize and reorder
+    /// - Batch-accumulates all 6 neighbor products before reducing
+    ///   (each product < Q² ≈ 11M, sum of 6 < 67M < 2^27)
+    /// - Uses [`barrett_reduce_small`] (single 64-bit multiply) instead
+    ///   of `barrett_reduce_unsigned` (u128 two-step)
+    /// - Pre-computed round constants and neighbor indices
+    #[inline(never)]
+    pub fn step_fast(&mut self) {
+        let total = self.n * self.n;
+        let spins = &self.spins;
+        let couplings = &self.couplings;
+
+        for i in 0..total {
+            let nbrs = &self.neighbor_indices[i];
+            let coupling_base = i * NUM_NEIGHBORS;
+
+            // Accumulate h_eff as sum of 6 products.
+            // Each product: coupling[k] * spin[j] < 3329 × 3329 = 11_082_241
+            // Sum of 6: < 6 × 11_082_241 = 66_493_446 < 2^27 = 134_217_728
+            let mut h_acc: u32 = 0;
+            for k in 0..NUM_NEIGHBORS {
+                h_acc += couplings[coupling_base + k] as u32 * spins[nbrs[k]] as u32;
+            }
+            // Single Barrett reduce of the entire sum.
+            let h_eff = barrett_reduce_small(h_acc) as u32;
+
+            // Round constant: pre-reduced.
+            let rc = self.round_constants[i] as u32;
+
+            // Mix: h_eff + spin[i] + rc < 3329 × 3 = 9987 < 2^27
+            let mixed = barrett_reduce_small(h_eff + spins[i] as u32 + rc) as u32;
+
+            // S-box: cube mod q. mixed < 3329, sq = mixed² < 3329² = 11_082_241 < 2^27
+            let sq = barrett_reduce_small(mixed * mixed) as u32;
+            // cube: sq * mixed < 3329 × 3329 < 2^27
+            let cube = barrett_reduce_small(sq * mixed);
+            self.scratch[i] = cube;
+        }
+
+        std::mem::swap(&mut self.spins, &mut self.scratch);
+    }
+
+    /// Execute `rounds` update steps (constant-time, for secret data).
     pub fn run(&mut self, rounds: usize) {
         for _ in 0..rounds {
             self.step();
+        }
+    }
+
+    /// Execute `rounds` fast update steps (public data only — see [`step_fast`]).
+    pub fn run_fast(&mut self, rounds: usize) {
+        for _ in 0..rounds {
+            self.step_fast();
         }
     }
 
@@ -198,15 +279,13 @@ impl SpinLattice {
     ///
     /// Each undirected edge is counted once (when `i < j`).
     pub fn energy(&self) -> i64 {
-        let n = self.n;
-        let total = n * n;
+        let total = self.n * self.n;
         let mut energy: i64 = 0;
 
         for i in 0..total {
-            let (r, c) = (i / n, i % n);
-            let nbrs = triangular_neighbors(r, c, n);
-            for (k, &(nr, nc)) in nbrs.iter().enumerate() {
-                let j = nr * n + nc;
+            let nbrs = &self.neighbor_indices[i];
+            for k in 0..NUM_NEIGHBORS {
+                let j = nbrs[k];
                 if i < j {
                     let t = barrett_reduce_unsigned(
                         black_box(self.couplings[i * NUM_NEIGHBORS + k] as u64)
