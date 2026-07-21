@@ -1,2 +1,5 @@
 /target
 stats_out/
+
+# Research crate build artifacts
+research/**/target/

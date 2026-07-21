@@ -88,10 +88,12 @@ qs_crypto/
 │   ├── DESIGN_PROPOSAL.md       # Full technical design document
 │   ├── RELEASE_NOTES_v0.2.md
 │   ├── SECURITY.md
-└── legacy/                      # Original Python prototypes
+├── legacy/                      # Original Python prototypes
     ├── q.py
     ├── starlight_crypto.py
     └── starlight_entropy.py
+└── research/                    # Experiments (not product API)
+    └── spin_backend/            # SpinBackend + ObserverMeter → SpinPRNG seeds
 ```
 
 ---

@@ -1,0 +1,15 @@
+[package]
+name = "spin_backend"
+version = "0.1.0"
+edition = "2021"
+description = "Research: SpinBackend + ObserverMeter + IsolationGate for SpinPRNG seeds"
+publish = false
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+sha3 = "0.10"
+getrandom = "0.2"
+
+[[example]]
+name = "isolation_demo"
+path = "examples/isolation_demo.rs"
