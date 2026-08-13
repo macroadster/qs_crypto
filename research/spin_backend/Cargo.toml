@@ -9,7 +9,23 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 sha3 = "0.10"
 getrandom = "0.2"
+# Optional path to product lattice for SpinLatticeBackend (research only).
+qs_crypto = { path = "../..", optional = true }
+
+[features]
+default = []
+# Real SpinLattice adapter — keeps default builds free of product linkage.
+spin-lattice = ["dep:qs_crypto"]
 
 [[example]]
 name = "isolation_demo"
 path = "examples/isolation_demo.rs"
+
+[[example]]
+name = "load_contention"
+path = "examples/load_contention.rs"
+
+[[example]]
+name = "qualified_prng_demo"
+path = "examples/qualified_prng_demo.rs"
+required-features = ["spin-lattice"]

@@ -120,9 +120,13 @@ Opaque bytes (or structured spins later) that **may** feed SpinPRNG.
 |-------|---------|
 | `wall_ns` | External wall duration of evolve+measure |
 | `label` | Session / phase tag |
-| Optional | `queue_ms`, `shot_count`, power samples, host load snapshot |
+| `load_hint` | Optional host load proxy |
+| `queue_ms` | Optional simulated/vendor queue wait (ms) |
+| `shot_count` | Optional shot count for QPU jobs |
+| `fidelity_proxy` | Optional \[0,1\] research quality proxy |
 
-Public-safe to log for experiments. **Not** secret key material.
+Public-safe to log for experiments. **Not** secret key material. Use
+`TimingReport::with_job_stats` to attach [`JobStats`] from `QuantumSimBackend`.
 
 ### 4.4 `IsolationProfile`
 
@@ -243,12 +247,83 @@ fn isolation_session(
 | Backend | Status | Notes |
 |---------|--------|-------|
 | `ClassicalMockBackend` | **In this crate** | Deterministic hash-based “lattice” stub for interface tests |
-| `SpinLatticeBackend` | Future adapter in product or research | Wrap `qs_crypto::core::lattice` |
-| `TrinBackend` | Future | `trin run` external process; meter wraps process wall time |
-| `QuantumBackend` | Future | Job submit + shot gather; report includes queue/shot stats |
+| `BusyMockBackend` | **In this crate** | Deterministic sample + tunable CPU burn (`rounds=N`) for gate experiments |
+| `SpinLatticeBackend` | **In this crate** (`feature = "spin-lattice"`) | Wraps `qs_crypto::SpinLattice`; sample = SHAKE of post-step spins |
+| `TrinBackend` | **In this crate** | `trin run` via `$PATH` or `TRIN=`; meter wraps process wall time |
+| `QuantumSimBackend` | **In this crate** | `DeviceSpinBackend<SimulatedQuantumDevice>` — stable research id `qpu-sim-v1` |
+| `QuantumDevice` trait | **In this crate** | Vendor-neutral `run_job` surface; sim + `VendorStubDevice` |
+| `VendorStubDevice` | **In this crate** | Documents cloud/on-prem hook; always errors until configured |
+| Real vendor device | Future | Implement `QuantumDevice` for IBM/IonQ/Braket/etc. |
+| `product_seed` bridge | **Feature `spin-lattice`** | `QualifiedSeed` → product `SpinPrng` (research only; product crate untouched) |
 
 Trin wiring: **external** process wall timing (meter outside the math path),
-deterministic kernel stdout → sample encoding — not jitter in SHAKE.
+host SHAKE(`secret ‖ program_hash ‖ stdout`) → sample — not jitter in SHAKE.
+
+### 8.1 Baseline calibration
+
+```text
+collect_wall_samples(backend, spec, secret, n)
+  → profile_from_samples / calibrate_profile(margin_ns, iqr_factor)
+  → IsolationProfile
+```
+
+Use idle-lab runs only for baselines. Empirical demo:
+
+```bash
+cargo run --example load_contention --release
+cargo run --example load_contention --release -- --trin
+cargo run --example load_contention --release --features spin-lattice -- --lattice
+cargo run --example load_contention --release --features spin-lattice -- --all
+cargo run --example load_contention --release -- --quantum
+```
+
+### 8.2 Quantum device trait + sim
+
+```text
+QuantumDevice::run_job(req) → QuantumJobResult { histogram, JobStats }
+DeviceSpinBackend<D>        → SpinBackend prepare/evolve/measure
+measure                     → SHAKE(secret ‖ program ‖ histogram)  // never stats
+```
+
+- [`SimulatedQuantumDevice`] — local CPU histogram (default deterministic).
+- [`VendorStubDevice`] — integration placeholder (`Backend` error until wired).
+- [`QuantumSimBackend`] — type alias with `backend_id = "qpu-sim-v1"`.
+- No real QPU; no claim that `fidelity_proxy` is cryptographic.
+
+### 8.3 Product seed bridge (research only)
+
+```text
+isolation_session → QualifiedSeed → spinprng_from_qualified(policy) → SpinPrng
+```
+
+| Policy | Behavior |
+|--------|----------|
+| `RequireIsolation` | Clean path only |
+| `AllowUnqualified` | Sample path with `isolation=false` |
+| `AllowOsUnqualified` | OS reseed path allowed |
+
+Product `qs_crypto` is **not** modified. Demo:
+
+```bash
+cargo run --example qualified_prng_demo --release --features spin-lattice
+```
+
+Baseline margin is **adaptive** (`AdaptiveMargin`: effective floor ∨ p95-fraction ∨
+spread×max(iqr, p95−p50)) via `calibrate_profile_adaptive` (3-run warmup discard).
+Absolute floor is capped at `min(floor, max(100µs, 2·p95))` so short evolutions
+are not dominated by a multi-ms floor.
+
+### Lab notes (2026-07-23, release, 2×ncpu burn threads)
+
+| Backend | Schedule | Idle Clean | Load Suspect | Seed idle==load |
+|---------|----------|------------|--------------|-----------------|
+| BusyMock | 80k burn | 100% | 100% | yes |
+| SpinLattice QS128 | 12288 steps | 100% | ~47% | yes |
+| Trin external | spin_sample.trin | 100% | ~93% | yes |
+| QuantumSim | 48k shots, queue=0 | 100% | ~93% | yes |
+
+Lattice under load is noisier than Busy/Trin (partial Suspect rate) but still
+shows separation; S3 seed hygiene holds on deterministic backends.
 
 ---
 
@@ -263,8 +338,18 @@ deterministic kernel stdout → sample encoding — not jitter in SHAKE.
 | T5 Seed hygiene | Seed bytes independent of `TimingReport` fields |
 | T6 Policy Abort | Suspect + Abort ⇒ no seed bytes returned |
 | T7 PRNG usefulness | Clean seeds drive sponge/PRNG-shaped absorb (product integration later) |
+| T8 Busy sample stable | Same schedule ⇒ same sample independent of constructor burn default |
+| T9 Baseline envelope | `profile_from_samples` → Clean inside / Suspect above p95+margin |
+| T10 Calibrate live | Idle `calibrate_profile` + `live_session` → Clean |
+| T11 Lattice (feature) | Determinism, secret sensitivity, seed hygiene |
+| T12 Trin (if binary) | Determinism + secret sensitivity via external process |
 
-Run: `cargo test` in `research/spin_backend/`.
+```bash
+cargo test
+cargo test --features spin-lattice
+cargo run --example isolation_demo
+cargo run --example load_contention --release
+```
 
 ---
 
@@ -272,7 +357,8 @@ Run: `cargo test` in `research/spin_backend/`.
 
 | Product piece | Relation |
 |---------------|----------|
-| `SpinPrng::new(seed)` | Unchanged; consumes qualified seed bytes |
+| `SpinPrng::new(seed)` | Unchanged; research `spinprng_from_qualified` wraps this |
+| Product public API | **Not wired** — bridge stays under `research/spin_backend` until review |
 | `SpinLattice` / `SpinSponge` | Future `SpinBackend` impl |
 | KEM (RLWE+SHAKE hardened path) | Orthogonal; do not block on isolation research |
 | Visual fingerprint / PAKE MITM | **Different** channel (identity / OOB) |
@@ -299,3 +385,7 @@ explicitly selected.*
 | Date | Note |
 |------|------|
 | 2026-07-21 | Initial interface freeze draft + `spin_backend` sketch crate. |
+| 2026-07-23 | SpinLatticeBackend (feature), TrinBackend, BusyMock, baseline helpers, load_contention empirical gate success. |
+| 2026-07-23 | AdaptiveMargin + warmup; multi-backend load_contention (`--busy/--lattice/--trin/--all`); lattice+trin lab table. |
+| 2026-07-23 | QuantumSimBackend + JobStats on TimingReport; `--quantum` load harness; dual-channel QPU sketch. |
+| 2026-07-23 | `QuantumDevice` + `DeviceSpinBackend` + `VendorStubDevice`; `product_seed` → SpinPrng bridge. |

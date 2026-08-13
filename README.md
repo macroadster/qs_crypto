@@ -93,7 +93,8 @@ qs_crypto/
     ├── starlight_crypto.py
     └── starlight_entropy.py
 └── research/                    # Experiments (not product API)
-    └── spin_backend/            # SpinBackend + ObserverMeter → SpinPRNG seeds
+    ├── spin_backend/            # Isolation gate + backends → SpinPRNG seeds
+    └── prng_quality/            # PRNG quality SUT + F-Q1 finding
 ```
 
 ---

@@ -6,10 +6,52 @@
 //! - **S4:** Only [`SpinSample`] feeds the hardness seed path.
 //! - **S5:** Network MITM ≠ process observer.
 //!
-//! Product `qs_crypto::SpinPrng` can consume [`QualifiedSeed::bytes`] later;
-//! this crate does not depend on `qs_crypto` yet.
+//! # Backends
+//! - [`ClassicalMockBackend`] — interface stub (always available)
+//! - [`BusyMockBackend`] — deterministic sample + tunable CPU burn (gate experiments)
+//! - [`TrinBackend`] — external `trin run` process; wall time is the meter
+//! - [`SpinLatticeBackend`] — product lattice (`feature = "spin-lattice"`)
+//! - [`QuantumSimBackend`] — QPU job sketch via [`QuantumDevice`] (no real device)
+//! - [`product_seed`] — optional bridge to product `SpinPrng` (`spin-lattice` feature)
+//!
+//! Product `qs_crypto` is an optional path dependency; default builds stay free of it.
 
 #![forbid(unsafe_code)]
+
+pub mod baseline;
+pub mod busy_backend;
+pub mod quantum_backend;
+pub mod quantum_device;
+pub mod trin_backend;
+
+#[cfg(feature = "spin-lattice")]
+pub mod lattice_backend;
+
+#[cfg(feature = "spin-lattice")]
+pub mod product_seed;
+
+pub use baseline::{
+    adaptive_margin_ns, calibrate_profile, calibrate_profile_adaptive,
+    calibrate_profile_adaptive_warmed, collect_wall_samples, collect_wall_samples_warmed,
+    iqr_sorted, live_session, percentile_sorted, profile_from_samples,
+    profile_from_samples_adaptive, verdict_histogram, AdaptiveMargin,
+};
+pub use busy_backend::BusyMockBackend;
+pub use quantum_backend::{
+    quantum_sim_spec, sample_from_histogram, DeviceSpinBackend, JobStats, QuantumDevice,
+    QuantumJobRequest, QuantumJobResult, QuantumSimBackend, SimulatedQuantumDevice,
+    VendorStubDevice,
+};
+pub use trin_backend::TrinBackend;
+
+#[cfg(feature = "spin-lattice")]
+pub use lattice_backend::SpinLatticeBackend;
+
+#[cfg(feature = "spin-lattice")]
+pub use product_seed::{
+    product_policy_from_release, spinprng_from_qualified, spinprng_from_qualified_with_params,
+    IsolationAwarePrng, ProductSeedPolicy,
+};
 
 use sha3::{
     digest::{ExtendableOutput, Update, XofReader},
@@ -22,14 +64,40 @@ use std::time::Instant;
 // ---------------------------------------------------------------------------
 
 /// Absorb `data` as `u64le(len) ‖ data`.
-fn absorb_lp(h: &mut impl Update, data: &[u8]) {
+pub(crate) fn absorb_lp(h: &mut impl Update, data: &[u8]) {
     h.update(&(data.len() as u64).to_le_bytes());
     h.update(data);
 }
 
 /// Absorb a UTF-8 string length-prefixed.
-fn absorb_str(h: &mut impl Update, s: &str) {
+pub(crate) fn absorb_str(h: &mut impl Update, s: &str) {
     absorb_lp(h, s.as_bytes());
+}
+
+/// Parse `rounds=N` from a free-form schedule id (comma-separated tags).
+///
+/// Returns `default` if no valid `rounds=` tag is present.
+pub fn parse_rounds(schedule_id: &str, default: usize) -> usize {
+    parse_schedule_u64(schedule_id, "rounds", default as u64) as usize
+}
+
+/// Parse `shots=N` from a free-form schedule id.
+pub fn parse_shots(schedule_id: &str, default: usize) -> usize {
+    parse_schedule_u64(schedule_id, "shots", default as u64) as usize
+}
+
+/// Parse `key=N` as u64 from a free-form schedule id (comma/space/semicolon tags).
+pub fn parse_schedule_u64(schedule_id: &str, key: &str, default: u64) -> u64 {
+    let prefix = format!("{key}=");
+    for part in schedule_id.split([',', ';', ' ']) {
+        let part = part.trim();
+        if let Some(n) = part.strip_prefix(&prefix) {
+            if let Ok(v) = n.parse::<u64>() {
+                return v;
+            }
+        }
+    }
+    default
 }
 
 // ---------------------------------------------------------------------------
@@ -78,12 +146,42 @@ pub struct SpinSample {
 }
 
 /// External meter output — never mixed into hardness seed (S1/S3).
-#[derive(Clone, Debug)]
+///
+/// Optional QPU-ish fields (`queue_ms`, `shot_count`, `fidelity_proxy`) are
+/// public-safe experiment metadata only — still forbidden in seed derivation.
+#[derive(Clone, Debug, Default)]
 pub struct TimingReport {
     pub label: String,
     pub wall_ns: u128,
     /// Optional host load proxy (0 if unused).
     pub load_hint: u32,
+    /// Simulated or vendor-reported queue wait (milliseconds).
+    pub queue_ms: Option<u32>,
+    /// Number of shots in the job (if applicable).
+    pub shot_count: Option<u32>,
+    /// Research fidelity / readout-quality proxy in \[0, 1\]; never key material.
+    pub fidelity_proxy: Option<f32>,
+}
+
+impl TimingReport {
+    pub fn wall_only(label: impl Into<String>, wall_ns: u128) -> Self {
+        Self {
+            label: label.into(),
+            wall_ns,
+            load_hint: 0,
+            queue_ms: None,
+            shot_count: None,
+            fidelity_proxy: None,
+        }
+    }
+
+    /// Attach job stats without changing wall_ns (observer channel only).
+    pub fn with_job_stats(mut self, stats: &crate::JobStats) -> Self {
+        self.queue_ms = Some(stats.queue_ms);
+        self.shot_count = Some(stats.shot_count);
+        self.fidelity_proxy = Some(stats.fidelity_proxy);
+        self
+    }
 }
 
 /// Baseline envelope for isolation checks.
@@ -218,15 +316,14 @@ impl ObserverMeter for WallClockMeter {
     fn stop(&mut self, label: &str) -> Result<TimingReport> {
         let started = self.start.take().ok_or(SpinBackendError::MeterNotRunning)?;
         let wall_ns = started.elapsed().as_nanos();
-        Ok(TimingReport {
-            label: if label.is_empty() {
+        Ok(TimingReport::wall_only(
+            if label.is_empty() {
                 self.label.clone()
             } else {
                 label.to_string()
             },
             wall_ns,
-            load_hint: 0,
-        })
+        ))
     }
 }
 
@@ -443,11 +540,7 @@ pub struct FixedMeter {
 impl ObserverMeter for FixedMeter {
     fn start(&mut self, _label: &str) {}
     fn stop(&mut self, label: &str) -> Result<TimingReport> {
-        Ok(TimingReport {
-            label: label.to_string(),
-            wall_ns: self.wall_ns,
-            load_hint: 0,
-        })
+        Ok(TimingReport::wall_only(label, self.wall_ns))
     }
 }
 
@@ -522,11 +615,7 @@ mod tests {
             margin_ns: 100,
             iqr_factor: 0.0,
         };
-        let report = TimingReport {
-            label: "t".into(),
-            wall_ns: 1500,
-            load_hint: 0,
-        };
+        let report = TimingReport::wall_only("t", 1500);
         assert_eq!(gate.gate(&report, &profile), IsolationVerdict::Clean);
     }
 
@@ -541,11 +630,7 @@ mod tests {
             margin_ns: 0,
             iqr_factor: 0.0,
         };
-        let report = TimingReport {
-            label: "t".into(),
-            wall_ns: 9000,
-            load_hint: 0,
-        };
+        let report = TimingReport::wall_only("t", 9000);
         assert_eq!(
             gate.gate(&report, &profile),
             IsolationVerdict::SuspectObserver
@@ -710,5 +795,109 @@ mod tests {
         let b = derive_os_unqualified_seed(b"reseed-os").unwrap();
         assert_eq!(a.len(), 32);
         assert_ne!(a, b, "getrandom should make successive unqualified seeds differ");
+    }
+
+    #[test]
+    fn parse_rounds_tag() {
+        assert_eq!(parse_rounds("rounds=32", 1), 32);
+        assert_eq!(parse_rounds("shots=10,rounds=8", 1), 8);
+        assert_eq!(parse_rounds("nope", 24), 24);
+    }
+
+    #[test]
+    fn busy_mock_sample_stable_under_different_burn_constructors() {
+        // Same schedule_id ⇒ same sample even if Default vs with_default_rounds
+        // both end up with the same rounds from schedule.
+        let spec = EvolutionSpec {
+            backend_id: "busy-mock-v1".into(),
+            program_hash: [1u8; 32],
+            schedule_id: "rounds=200".into(),
+            mode: EvolutionMode::DeterministicClassical,
+        };
+        let mut a = BusyMockBackend::default();
+        let mut b = BusyMockBackend::with_default_rounds(9_999_999);
+        a.prepare(&spec, b"s").unwrap();
+        b.prepare(&spec, b"s").unwrap();
+        a.evolve().unwrap();
+        b.evolve().unwrap();
+        // schedule overrides constructor default ⇒ same rounds & same sample
+        assert_eq!(a.measure().unwrap(), b.measure().unwrap());
+    }
+
+    #[test]
+    fn baseline_profile_from_samples() {
+        let spec = test_spec();
+        let samples = [100u128, 110, 120, 130, 140, 150, 200, 1000];
+        let p = profile_from_samples(&spec, &samples, 50, 3.0);
+        assert_eq!(p.spec_fingerprint, spec.fingerprint());
+        assert!(p.baseline_p50_ns <= p.baseline_p95_ns);
+        assert!(p.baseline_iqr_ns > 0);
+        // Inflated report ⇒ Suspect
+        let gate = EnvelopeGate;
+        let hot = TimingReport::wall_only("hot", p.baseline_p95_ns + p.margin_ns + 1);
+        assert_eq!(gate.gate(&hot, &p), IsolationVerdict::SuspectObserver);
+        let cool = TimingReport::wall_only("cool", p.baseline_p50_ns);
+        assert_eq!(gate.gate(&cool, &p), IsolationVerdict::Clean);
+    }
+
+    #[test]
+    fn adaptive_margin_respects_floor_and_spread() {
+        // ~1 ms tight cluster, floor 2 ms → effective_floor = min(2ms, 2·p95)=2ms.
+        let tight = [1_000_000u128; 11];
+        let m_tight = adaptive_margin_ns(
+            &tight,
+            AdaptiveMargin {
+                floor_ns: 2_000_000,
+                p95_fraction: 1.0 / 6.0,
+                spread_mult: 3.0,
+            },
+        );
+        assert_eq!(m_tight, 2_000_000);
+
+        // Sub-ms work: 2 ms absolute floor must not apply in full.
+        let short = [200_000u128; 11]; // 0.2 ms
+        let m_short = adaptive_margin_ns(&short, AdaptiveMargin::default());
+        assert!(
+            m_short <= 400_000,
+            "short evolution margin should be ≤2·p95, got {m_short}"
+        );
+
+        // Wide spread → spread_mult * (p95-p50) dominates.
+        let wide: Vec<u128> = (0..21).map(|i| 1_000_000 + i * 100_000).collect();
+        let m_wide = adaptive_margin_ns(&wide, AdaptiveMargin::default());
+        assert!(m_wide > 2_000_000, "expected spread-driven margin, got {m_wide}");
+
+        let p = profile_from_samples_adaptive(
+            &test_spec(),
+            &wide,
+            AdaptiveMargin::default(),
+            0.0,
+        );
+        assert_eq!(p.margin_ns, m_wide);
+    }
+
+    #[test]
+    fn calibrate_and_clean_live_session() {
+        let spec = EvolutionSpec {
+            backend_id: "busy-mock-v1".into(),
+            program_hash: [2u8; 32],
+            schedule_id: "rounds=500".into(),
+            mode: EvolutionMode::DeterministicClassical,
+        };
+        let mut backend = BusyMockBackend::default();
+        let profile = calibrate_profile(&mut backend, &spec, b"cal", 7, 5_000_000, 0.0).unwrap();
+        assert!(profile.baseline_p95_ns > 0);
+        // Live idle session should usually be Clean with generous margin.
+        let q = live_session(
+            &mut backend,
+            &spec,
+            b"cal",
+            &profile,
+            ReleasePolicy::Abort,
+        )
+        .unwrap();
+        assert_eq!(q.verdict, IsolationVerdict::Clean);
+        assert!(q.isolation);
+        assert_eq!(q.bytes.len(), 32);
     }
 }

@@ -1,3 +1,7 @@
+Streaming SpinPrng (unlimited until BigCrush exits) → Docker
+Results → /Users/eric/sandbox/qs_crypto/benches/reports/v0.3/results/bigcrush_results.txt
+Note: host SpinPrng is fast post-2026-07; TestU01 CPU dominates (~3.5–6 h wall).
+See research/prng_quality/QUALITY_RESULTS.md.
 === TestU01 BigCrush — QS-Crypto SpinPrng (stdin stream) ===
 
 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
@@ -3784,3 +3788,4 @@ Generator state:
 
 
 === BigCrush complete ===
+Done. Results: /Users/eric/sandbox/qs_crypto/benches/reports/v0.3/results/bigcrush_results.txt

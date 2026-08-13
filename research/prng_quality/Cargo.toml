@@ -1,0 +1,12 @@
+[package]
+name = "prng_quality"
+version = "0.1.0"
+edition = "2021"
+description = "Research: SpinPrng quality evaluation (internal battery + isolation seed path)"
+publish = false
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+qs_crypto = { path = "../.." }
+spin_backend = { path = "../spin_backend", features = ["spin-lattice"] }
+getrandom = "0.2"

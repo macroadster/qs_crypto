@@ -1,3 +1,10 @@
-    Finished `release` profile [optimized] target(s) in 0.08s
-     Running `target/release/stats --megabytes 200000 --output -`
-Generating stream 0 → - (200000 MiB)...
+    Finished `release` profile [optimized] target(s) in 0.04s
+     Running `target/release/stats --megabytes 0 --output -`
+QS-Crypto Statistical Validation Harness
+========================================
+
+Generating stream 0 → - (unlimited until pipe close)...
+  Wrote 1428418461696 bytes (1362246.0 MiB) in 25254.39s (53.9 MiB/s) [consumer closed pipe]
+
+
+Generation complete.

@@ -1,0 +1,11 @@
+    Finished `release` profile [optimized] target(s) in 0.03s
+     Running `target/release/stats --megabytes 200000 --output -`
+Generating stream 0 → - (200000 MiB)...
+  Wrote 209715200000 bytes in 4938.62s (40.5 MiB/s)
+
+
+Generation complete.
+Next steps for serious validation:
+  dieharder -a -g 201 -f <file.bin>
+  TestU01 BigCrush (file_input generator)
+  NIST Statistical Test Suite

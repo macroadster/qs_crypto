@@ -8,42 +8,45 @@ TestU01 image + runners: `scripts/testu01/` (`qs-crypto-testu01`) —
 `bigcrush_stream.c` (stdin pipe; preferred), `bigcrush_wrapper.c` (file input),
 `run_bigcrush.sh`.
 
+**Quality research track (updated 2026-08-12):** `research/prng_quality/` defines
+SUT-A/B/C and finding **F-Q1** in `research/prng_quality/QUALITY_RESULTS.md`.
+External suite status after expander fix + streaming BigCrush:
+
+| Suite | Result |
+|-------|--------|
+| Internal battery | PASS |
+| dieharder 1 GiB (post-fix) | **109 PASS / 5 WEAK / 0 FAIL** |
+| NIST SP 800-22 | Largely pass (prior Docker) |
+| TestU01 BigCrush | **All 160 statistics passed** (2026-08-12) |
+
 - [x] Run dieharder full suite on all 5 streams (Docker `dieharder -a -g 201`)
 - [x] Run NIST STS (α=0.01, 1M bits × 100 sequences per stream, Docker STS 2.1.2)
-- [ ] Finish TestU01 BigCrush on continuous SpinPrng stream (in progress — see status)
-- [ ] Record BigCrush results under `benches/reports/v0.3/` (results file + summary markdown)
+- [x] Finish TestU01 BigCrush on continuous SpinPrng stream (Docker streaming)
+- [x] Record BigCrush results under `benches/reports/v0.3/` (results + summary)
 - [x] Record results in `benches/reports/v0.3/nist_sp800_22.md` (dieharder + NIST)
 - [x] Flag FAILED/WEAK results for investigation (see report; open items below)
+- [x] Define SUT + internal quality harness (`research/prng_quality`)
+- [x] Record formal F-Q1 quality finding (updated after BigCrush pass)
+- [x] Re-dieharder on **1 GiB** SUT-A + isolation SUT-B (Docker 2026-07-23)
+- [x] Note: OPSO/OQSO FAILED both SUTs @ 2 rewinds; many 100 MiB FAILs cleared
+- [x] OPSO/OQSO root cause: hard re-key/CTR expander (not isolation)
+- [x] Fix: continuous SplitMix + soft re-mix in `squeeze_streaming_into`
+- [x] OPSO/OQSO PASS after fix (1 GiB)
+- [x] Full dieharder 1 GiB after fix: **109 PASS / 5 WEAK / 0 FAIL**
+- [x] Complete BigCrush stream (2026-08-12): **All tests were passed**
 
-**Status (2026-06-30):** **dieharder + NIST completed via Docker.** Raw logs under
-`benches/reports/v0.3/results/`. NIST largely passes (isolated proportion `*` on some
-streams). dieharder reports **consistent FAILED** on `marsaglia_tsang_gcd`,
-`dab_bytedistrib`, `dab_monobit2`, and multiple `rgb_lagged_sum` ntuples — partly
-confounded by thousands of file rewinds on 100 MiB inputs; **re-test on multi-GiB
-streams before treating as definitive**.
-
-**BigCrush (updated 2026-06-30):** Finite **1 GiB files are insufficient** (first
-MultinomialOver alone needs >1 GiB). Approach changed to **on-the-fly streaming**:
+**BigCrush (2026-08-12):** Streaming path only. Finite files / fixed 200 GiB caps
+EOF mid-battery. Final run used unlimited host pipe:
 
 ```bash
 ./scripts/testu01/run_bigcrush.sh
-# stats --megabytes 200000 --output - | docker run --rm -i --entrypoint bigcrush_stream qs-crypto-testu01
+# stats --megabytes 0 --output - | docker run --rm -i --entrypoint bigcrush_stream qs-crypto-testu01
 ```
 
-- Host **`stats` / SpinPrng** is the bottleneck at **~0.8 MiB/s** release (was
-  ~0.1 MiB/s before lattice hot-path optimisations; one core, almost all time in
-  `SpinLattice::step` via mini-block permutes every 48 bytes). Docker stdin is
-  **not** the stall.
-- Wall time at that rate is on the order of **~many hours to ~1 day** (tens of
-  GiB of stream; script caps at 200 000 MiB to avoid early EOF). Expect little
-  output in `benches/reports/v0.3/results/bigcrush_results.txt` until early
-  battery tests complete.
-- A run was started via `run_bigcrush.sh` (container `bigcrush_stream`); treat as
-  **in progress** until `=== BigCrush complete ===` or an EOF/short-read exit.
-
-**Speed-up options (optional follow-ups, restart required):** optimize
-`SpinLattice::step`; document alternate squeeze (`squeeze_raw` / larger mini-block)
-if testing a defined variant; Docker/pipe tweaks will not move the needle.
+- **Verdict:** All 160 statistics passed (TestU01 1.2.3, `SpinPrng_QS256_stdin`)
+- **CPU:** 06:23:48.75 · host wall ~7 h · ~1.33 TiB streamed through pipe (no stream file)
+- **Artifacts:** `benches/reports/v0.3/results/bigcrush_results.txt`,
+  summary `benches/reports/v0.3/testu01_bigcrush.md`
 
 ## Priority 2 — Investigate differential analysis plateau
 
@@ -116,7 +119,7 @@ Depends on priorities 1–2 being complete. The review request doc exists at
 `docs/SPINLATTICE_REVIEW_REQUEST.md`.
 
 - [x] Finalize statistical evidence for priority 2 (metric corrected; avalanche confirmed)
-- [ ] Finalize statistical evidence for priority 1 (dieharder/NIST run; open FAIL investigation + BigCrush in progress / streaming)
+- [x] Finalize statistical evidence for priority 1 (dieharder/NIST + BigCrush all-pass 2026-08-12; dieharder WEAKs residual only)
 - [ ] Submit to IACR ePrint (SG-LWE hardness assumption) — **human-only**
 - [ ] Post to crypto/real-world-crypto mailing lists — **human-only**
 - [ ] Direct outreach to lattice cryptographers — **human-only**

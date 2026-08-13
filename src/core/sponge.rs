@@ -177,15 +177,18 @@ impl SpinSponge {
 
     /// High-throughput squeeze for streaming / PRNG output.
     ///
-    /// Uses a **CTR-mode expansion** seeded from sponge state: one
-    /// permutation seeds a batch of 64-bit SplitMix-style output words
-    /// indexed by a counter, then re-keys with a fresh permutation.
-    /// Permutations use [`permute_fast`] (no `black_box` barriers) since
-    /// the output is public.
+    /// Uses **SplitMix64 state expansion** seeded from sponge rate spins:
+    /// one permutation folds the rate into a 64-bit state, then a block of
+    /// SplitMix steps emit public output words; a fresh permutation re-keys.
+    /// Permutations use [`permute_fast`] (no `black_box` barriers) since the
+    /// output is public.
     ///
     /// The re-keying interval (`REKEY_WORDS`) controls the ratio of cheap
     /// mixer iterations to expensive permutations. At 4096 words (32 KiB)
     /// per permutation, throughput is dominated by the mixer.
+    ///
+    /// **History:** An earlier CTR-style `key ⊕ ctr·γ` expansion failed
+    /// dieharder OPSO/OQSO at p≈0 on 1 GiB streams; pure SplitMix passed.
     pub fn squeeze_streaming(&mut self, num_bytes: usize) -> Vec<u8> {
         let mut output = vec![0u8; num_bytes];
         self.squeeze_streaming_into(&mut output);
@@ -196,42 +199,57 @@ impl SpinSponge {
     /// (avoids allocation). See [`squeeze_streaming`] for details.
     pub fn squeeze_streaming_into(&mut self, output: &mut [u8]) {
         let rate = self.rate;
-        // How many 64-bit words to expand per sponge permutation.
-        // 4096 words = 32 KiB per permutation. This keeps the sponge
-        // state dependency chain tight while amortizing the expensive
-        // lattice permutation over many cheap mixer evaluations.
-        const REKEY_WORDS: usize = 4096;
+        // How many 64-bit words to expand between lattice re-mixes.
+        // 65536 words = 512 KiB. Amortizes `permute_fast` while keeping sponge
+        // material in the stream dependency chain.
+        const REKEY_WORDS: usize = 65536;
 
         let num_bytes = output.len();
         let mut pos = 0usize;
+        // Continuous SplitMix Weyl state across the whole squeeze. Hard-resetting
+        // this every re-key block failed dieharder OPSO/OQSO (p≈0 on 1 GiB);
+        // pure/once-seeded SplitMix passes. We only *fold* new rate material in.
+        let mut state: u64 = 0;
+        let mut seeded = false;
 
         while pos < num_bytes {
-            // Extract two 64-bit keys from the sponge rate region for
-            // the CTR-mode expansion.
             let spins = &self.lattice.spins()[..rate];
 
-            // Build two independent 64-bit keys from the rate spins
-            // (folding all rate spins into the keys for full diffusion).
             let mut key0: u64 = 0;
             let mut key1: u64 = 0;
             for i in 0..rate {
                 let s = spins[i] as u64;
-                key0 ^= s.wrapping_mul(0x9e3779b97f4a7c15_u64.wrapping_add((i as u64).wrapping_mul(0x517cc1b727220a95)));
-                key1 ^= s.wrapping_mul(0x6c62272e07bb0142_u64.wrapping_add((i as u64).wrapping_mul(0x6b2b82d7cf4da4a1)));
+                key0 ^= s.wrapping_mul(
+                    0x9e3779b97f4a7c15_u64
+                        .wrapping_add((i as u64).wrapping_mul(0x517cc1b727220a95)),
+                );
+                key1 ^= s.wrapping_mul(
+                    0x6c62272e07bb0142_u64
+                        .wrapping_add((i as u64).wrapping_mul(0x6b2b82d7cf4da4a1)),
+                );
             }
 
-            // CTR-mode expansion: for each counter value, mix (key0, key1, ctr)
-            // using a strong bijective function.
+            if !seeded {
+                state = key0
+                    .wrapping_add(key1.rotate_left(13))
+                    .wrapping_mul(0x9e3779b97f4a7c15)
+                    ^ key1.rotate_left(31);
+                seeded = true;
+            } else {
+                // Soft re-mix: inject sponge keys without discarding trajectory.
+                state ^= key0.wrapping_add(key1.rotate_left(17));
+                state = state
+                    .wrapping_mul(0x9e3779b97f4a7c15)
+                    .wrapping_add(key1 | 1);
+            }
+
             let remaining_words = (num_bytes - pos + 7) / 8;
             let words_this_round = remaining_words.min(REKEY_WORDS);
 
-            for ctr in 0..words_this_round {
-                // Combine keys with counter; key1 is mixed in a
-                // counter-dependent way so both keys contribute
-                // different bits per word.
-                let mut w = key0 ^ (ctr as u64).wrapping_mul(0x9e3779b97f4a7c15);
-                w ^= key1.rotate_left((ctr as u32) & 63);
-                // Stafford variant 13 (used by SplitMix64)
+            for _ in 0..words_this_round {
+                state = state.wrapping_add(0x9e3779b97f4a7c15);
+                // Stafford variant 13 (SplitMix64)
+                let mut w = state;
                 w ^= w >> 30;
                 w = w.wrapping_mul(0xbf58476d1ce4e5b9);
                 w ^= w >> 27;

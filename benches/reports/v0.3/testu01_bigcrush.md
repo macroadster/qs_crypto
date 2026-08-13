@@ -1,80 +1,77 @@
 # TestU01 BigCrush Report
 
-**Date:** 2026-05-09
-**Version:** QS-Crypto v0.3
-**Primitive under test:** SpinPrng (QS-256 sponge, 32 permutation rounds)
+**Date:** 2026-08-12 (clean pass) · prior stubs 2026-05-09 / 2026-06-30  
+**Version:** QS-Crypto v0.2 product / v0.3 validation track  
+**Primitive under test:** SpinPrng (QS-256 sponge, continuous SplitMix soft re-mix expander)
+
+## Result (authoritative)
+
+```
+========= Summary results of BigCrush =========
+
+ Version:          TestU01 1.2.3
+ Generator:        SpinPrng_QS256_stdin
+ Number of statistics:  160
+ Total CPU time:   06:23:48.75
+
+ All tests were passed
+```
+
+| Field | Value |
+|-------|--------|
+| Verdict | **All 160 statistics passed** |
+| Method | Streaming stdin (`bigcrush_stream` in Docker `qs-crypto-testu01`) |
+| Host stream | `stats --megabytes 0 --output -` (unlimited until pipe close) |
+| Bytes fed | **1 428 418 461 696** (~1.33 TiB / 1 362 246 MiB) @ ~53.9 MiB/s |
+| Wall | ~7.0 h (25254 s host stream duration; TestU01 CPU 6 h 24 m) |
+| Disk used for stream | **~0** (pipe only); results text ~95 KB |
+| p-values sampled | 254 reported; min **0.0054**, max **0.9975**; **no `eps`**, none outside (10⁻⁴, 1−10⁻⁴) |
+| Raw log | [`results/bigcrush_results.txt`](results/bigcrush_results.txt) |
+| Run note | [`results/VALIDATION_RUN_2026-08-12.md`](results/VALIDATION_RUN_2026-08-12.md) |
+
+**Interpretation:** SpinPrng (QS-256) passes TestU01 BigCrush under the current squeeze/expander. This is strong external statistical evidence. It is **not** a cryptographic security proof of the sponge permutation; hybrid/SHAKE paths remain preferred for asymmetric hardness claims.
+
+## How to reproduce (min-disk)
+
+```bash
+# Build image once
+docker build -t qs-crypto-testu01 scripts/testu01/
+
+# Stream until BigCrush exits (default BIGCRUSH_MEGABYTES=0)
+./scripts/testu01/run_bigcrush.sh
+# Results → benches/reports/v0.3/results/bigcrush_results.txt
+```
+
+Finite file input is **not** recommended: MultinomialOver alone needs ≫1 GiB, and a fixed 200 GiB cap ended mid-battery (see partial log `results/bigcrush_results_partial_200g_eof.txt`).
 
 ## Overview
 
-TestU01's BigCrush battery is the most demanding publicly available statistical
-test suite for random number generators. It runs 160 individual tests and
-typically requires ~4 hours on modern hardware with ≥1 GiB of input data.
+TestU01 BigCrush runs 160 statistics. TestU01 treats a p-value outside roughly
+(10⁻¹⁰, 1−10⁻¹⁰) as a failure (`eps`). A well-designed PRNG is expected to pass
+all tests; even 1–2 failures warrant investigation.
 
-## Setup
+### Families exercised (this run)
 
-### 1. Generate the input stream
+Among others: Serial/Collision MultinomialOver, BirthdaySpacings, ClosePairs,
+SimpPoker, CouponCollector, Gap, Run, MaxOft, WeightDistrib, MatrixRank, GCD,
+Savir2, RandomWalk1, LinearComp, LempelZiv, Fourier3, Hamming\*, AutoCor,
+AppearanceSpacings, SampleMean/Prod/Corr, SumCollector, PeriodsInStrings,
+LongestHeadRun.
 
-```bash
-cargo run --release --bin stats -- --megabytes 1024 --output stats_out/spinprng_bigcrush.bin
-```
+## Historical status
 
-This produces a single 1 GiB binary file of SpinPrng output at QS-256 security level.
+| Date | Outcome |
+|------|---------|
+| 2026-05-09 | Infrastructure stub; file-based path documented |
+| 2026-06-30 | Blocked on host TestU01 install; Docker path designed |
+| 2026-07-23 | Streaming attempted; finite-cap / incomplete records |
+| 2026-08-12 | **Clean pass** via Docker streaming + unlimited host pipe |
 
-### 2. Build the C wrapper
+### Attempt log (2026-08-12)
 
-Prerequisites: Install TestU01 from source:
-- Source: http://simul.iro.umontreal.ca/testu01/tu01.html
-- Or: https://github.com/umontreal-simul/TestU01-2009
-
-```bash
-cd scripts/testu01/
-gcc -O2 -o bigcrush_wrapper bigcrush_wrapper.c \
-    -I/usr/local/include -L/usr/local/lib \
-    -ltestu01 -lprobdist -lmylib -lm
-```
-
-### 3. Run BigCrush
-
-```bash
-./bigcrush_wrapper ../../stats_out/spinprng_bigcrush.bin | tee bigcrush_results.txt
-```
-
-Expected runtime: approximately 4 hours.
-
-## Result Interpretation
-
-BigCrush runs 160 tests. For each test:
-- **PASS**: p-value in (ε, 1-ε) where ε = 10⁻¹⁰ — no evidence of non-randomness
-- **FAIL**: p-value outside this range — indicates a statistical anomaly
-
-A well-designed PRNG should pass all 160 tests. Even 1-2 failures warrant
-investigation (unlike dieharder where occasional WEAKs are expected).
-
-### Tests included in BigCrush
-
-BigCrush includes (among others):
-- Serial Over, CollisionOver, BirthdaySpacings
-- Gap, Permutation, Run, MaxOft
-- WeightDistrib, SumCollector, MatrixRank
-- Savir2, GCD, RandomWalk1
-- LinearComp, LempelZiv, Fourier3, LongestHeadRun
-- ClosePairs, SimpPoker, CouponCollector
-- AutoCor, HammingWeight, HammingCorr
-- And ~140 more (full list in TestU01 documentation)
-
-## Status
-
-- [x] C wrapper created (`scripts/testu01/bigcrush_wrapper.c`)
-- [x] Stream generation command documented
-- [ ] 1 GiB stream generation: not run on implementation host (large artifact; run when TestU01 is available)
-- [ ] BigCrush execution: **blocked** — TestU01 libraries not installed (`libtestu01` absent under `/usr/local/lib`)
-
-### Attempt log (2026-06-30)
-
-| Check | Result |
-|-------|--------|
-| TestU01 headers/libs | not found |
-| `bigcrush_wrapper` binary | not built (depends on TestU01) |
-| 1 GiB stream | not generated (blocked on runner time / tool availability) |
-
-No BigCrush pass/fail results are recorded. Infrastructure and commands remain ready for a machine with TestU01 installed.
+| Step | Result |
+|------|--------|
+| Docker `qs-crypto-testu01` | Built and used |
+| Finite 200 GiB stream | EOF mid-`sknuth_SimpPoker` (~45 p-values; no failures yet) |
+| Unlimited stream fix | `stats --megabytes 0` + BrokenPipe exit |
+| Full BigCrush | **All tests were passed** |

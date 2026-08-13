@@ -35,7 +35,7 @@
 
 use std::env;
 use std::fs::{self, File};
-use std::io::Write;
+use std::io::{self, Write};
 use std::time::Instant;
 
 use qs_crypto::core::lattice::SpinLattice;
@@ -66,8 +66,17 @@ fn main() {
     let do_differential = args.contains(&"--differential".to_string());
     let diff_max_weight = parse_usize_flag(&args, "--max-weight", 3);
 
-    println!("QS-Crypto Statistical Validation Harness");
-    println!("========================================\n");
+    // When streaming binary to stdout, never print banners on stdout.
+    let streaming_stdout = output == "-" || output == "/dev/stdout";
+    let announce = |msg: &str| {
+        if streaming_stdout {
+            eprintln!("{}", msg);
+        } else {
+            println!("{}", msg);
+        }
+    };
+    announce("QS-Crypto Statistical Validation Harness");
+    announce("========================================\n");
 
     if do_differential {
         run_differential_cryptanalysis(trials, diff_max_weight);
@@ -90,9 +99,22 @@ fn main() {
     }
 
     // Otherwise generate random byte streams for external tools
-    fs::create_dir_all(&output_dir).ok();
+    if !streaming_stdout {
+        fs::create_dir_all(&output_dir).ok();
+    }
 
-    let total_bytes = megabytes * 1024 * 1024;
+    // --megabytes 0 with --output - streams until the consumer closes the pipe
+    // (correct for TestU01 BigCrush; a finite 200 GiB cap ends mid-battery).
+    let unlimited = megabytes == 0;
+    if unlimited && !streaming_stdout {
+        eprintln!("error: --megabytes 0 (unlimited) requires --output -");
+        std::process::exit(2);
+    }
+    let total_bytes = if unlimited {
+        usize::MAX
+    } else {
+        megabytes.saturating_mul(1024 * 1024)
+    };
     let params = Params::from_security_level(SecurityLevel::QS256);
 
     for s in 0..streams {
@@ -117,24 +139,43 @@ fn main() {
             }
         };
         log(format!(
-            "Generating stream {} → {} ({} MiB)...",
-            s, filename, megabytes
+            "Generating stream {} → {} ({})...",
+            s,
+            filename,
+            if unlimited {
+                "unlimited until pipe close".to_string()
+            } else {
+                format!("{} MiB", megabytes)
+            }
         ));
         let start = Instant::now();
 
         let mut remaining = total_bytes;
         const CHUNK: usize = 1 << 20; // 1 MiB chunks
         let mut buf = vec![0u8; CHUNK];
+        let mut written: u64 = 0;
+        let mut pipe_closed = false;
 
         if to_stdout {
-            let mut out = std::io::stdout().lock();
+            let mut out = io::stdout().lock();
             while remaining > 0 {
                 let want = remaining.min(CHUNK);
                 prng.fill_bytes(&mut buf[..want]);
-                out.write_all(&buf[..want]).expect("write failed");
-                remaining -= want;
+                match out.write_all(&buf[..want]) {
+                    Ok(()) => {
+                        written += want as u64;
+                        if !unlimited {
+                            remaining -= want;
+                        }
+                    }
+                    Err(e) if e.kind() == io::ErrorKind::BrokenPipe => {
+                        pipe_closed = true;
+                        break;
+                    }
+                    Err(e) => panic!("write failed: {e}"),
+                }
             }
-            out.flush().unwrap();
+            let _ = out.flush();
         } else {
             let mut file = File::create(&filename).expect("cannot create output file");
             while remaining > 0 {
@@ -142,19 +183,33 @@ fn main() {
                 prng.fill_bytes(&mut buf[..want]);
                 file.write_all(&buf[..want]).expect("write failed");
                 remaining -= want;
+                written += want as u64;
             }
             file.flush().unwrap();
         }
 
         let elapsed = start.elapsed();
-        let rate = (total_bytes as f64) / (1024.0 * 1024.0) / elapsed.as_secs_f64();
+        let mib = written as f64 / (1024.0 * 1024.0);
+        let rate = if elapsed.as_secs_f64() > 0.0 {
+            mib / elapsed.as_secs_f64()
+        } else {
+            0.0
+        };
         log(format!(
-            "  Wrote {} bytes in {:.2?} ({:.1} MiB/s)\n",
-            total_bytes, elapsed, rate
+            "  Wrote {} bytes ({:.1} MiB) in {:.2?} ({:.1} MiB/s){}\n",
+            written,
+            mib,
+            elapsed,
+            rate,
+            if pipe_closed {
+                " [consumer closed pipe]"
+            } else {
+                ""
+            }
         ));
 
         // Also run a quick bias check on the first 4 MiB of this stream
-        if megabytes >= 4 && !to_stdout {
+        if !unlimited && megabytes >= 4 && !to_stdout {
             let mut prng2 = SpinPrng::with_params(seed.as_bytes(), &params);
             let sample = prng2.next_bytes(4 * 1024 * 1024);
             let (passed, report) = quick_bias_report(&sample);
@@ -167,17 +222,19 @@ fn main() {
     }
 
     let done = |msg: &str| {
-        if output == "-" || output == "/dev/stdout" {
+        if streaming_stdout {
             eprintln!("{}", msg);
         } else {
             println!("{}", msg);
         }
     };
     done("\nGeneration complete.");
-    done("Next steps for serious validation:");
-    done("  dieharder -a -g 201 -f <file.bin>");
-    done("  TestU01 BigCrush (file_input generator)");
-    done("  NIST Statistical Test Suite");
+    if !streaming_stdout {
+        done("Next steps for serious validation:");
+        done("  dieharder -a -g 201 -f <file.bin>");
+        done("  TestU01 BigCrush (file_input generator)");
+        done("  NIST Statistical Test Suite");
+    }
 }
 
 fn print_help() {
@@ -188,9 +245,10 @@ USAGE:
     cargo run --bin stats [OPTIONS]
 
 OPTIONS:
-    --megabytes N       How many MiB of random data to generate per stream (default: 32)
+    --megabytes N       MiB per stream (default: 32). Use 0 with --output - for unlimited
+                        streaming until the consumer closes the pipe (BigCrush).
     --streams K         Number of independent streams to generate (default: 1)
-    --output FILE       Single output filename (when --streams=1)
+    --output FILE       Single output filename (when --streams=1); use - for stdout
     --output-dir DIR    Directory for multi-stream output (default: stats_out/)
     --permutation       Run Monte-Carlo diffusion/avalanche study on SpinLattice
     --trials N          Number of trials for --permutation (default: 2000)
@@ -203,6 +261,7 @@ OPTIONS:
 EXAMPLES:
     cargo run --bin stats -- --quick
     cargo run --bin stats -- --megabytes 100 --streams 3 --output-dir /tmp/qs_stats
+    cargo run --release --bin stats -- --megabytes 0 --output - | docker run --rm -i --entrypoint bigcrush_stream qs-crypto-testu01
     cargo run --bin stats -- --permutation --trials 10000
     cargo run --bin stats -- --differential --trials 5000 --max-weight 3
 "#

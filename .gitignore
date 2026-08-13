@@ -3,3 +3,7 @@ stats_out/
 
 # Research crate build artifacts
 research/**/target/
+
+# PRNG quality harness: keep text logs, ignore multi-MiB streams
+research/prng_quality/out/*.bin
+research/prng_quality/target/
