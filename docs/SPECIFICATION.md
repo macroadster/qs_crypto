@@ -183,7 +183,7 @@ The hybrid key derivation ensures confidentiality even if SpinSponge is broken (
 ```
 KeyGen(params) → (pk, sk):
     1. seed ← OS_Random(32)
-    2. a    ← SHAKE256_Expand(seed, N)           // uniform polynomial in R_q
+    2. a    ← SHAKE256_Expand(seed, N)           // 12-bit rejection sampling, uniform in [0, q)
     3. s    ← CBD_SHAKE(η, N)                     // secret polynomial
     4. e    ← CBD_SHAKE(η, N)                     // error polynomial
     5. b    ← a·s + e   (mod X^N+1, mod q)
@@ -198,12 +198,12 @@ KeyGen(params) → (pk, sk):
 Encaps(pk) → (ct, ss):
     1. Parse pk: level, seed, b
     2. coin ← OS_Random(coin_bytes)
-    3. (r, e1, e2) ← DeriveBlinding(coin, H(pk))   // SHAKE256
-    4. a ← SHAKE256_Expand(seed, N)
+    3. (r, e1, e2) ← DeriveBlinding(coin, SHAKE256(pk))
+    4. a ← SHAKE256_Expand(seed, N)               // same 12-bit rejection as KeyGen
     5. c1 ← a·r + e1
     6. c2 ← b·r + e2 + Encode(coin)
     7. ct ← [level ‖ encode(c1) ‖ encode(c2)]
-    8. ss ← SpinHash(0x11 ‖ coin ‖ ct)
+    8. ss ← SHAKE256(0x11 ‖ coin ‖ ct)
     9. return (ct, ss)
 ```
 
@@ -216,7 +216,7 @@ Decaps(sk, ct) → ss:
     3. m̃ ← c2 - s·c1                              // noisy message
     4. m' ← Decode(m̃)                              // round to nearest
     5. (ct', ss_valid) ← Encaps_inner(pk, m')       // re-encapsulate
-    6. ss_reject ← SpinHash(0x12 ‖ sk ‖ ct)
+    6. ss_reject ← SHAKE256(0x12 ‖ sk ‖ ct)
     7. match ← CT_EQ(ct, ct')                       // constant-time
     8. ss ← CT_SELECT(match, ss_valid, ss_reject)
     9. return ss

@@ -41,18 +41,61 @@ impl ShakePrng {
     }
 }
 
+/// SHAKE256 squeeze of `input` to 32 bytes.
+///
+/// Used for FO `H` / `H'` (domain bytes `0x11` / `0x12`) so the
+/// IND-CCA2 reduction depends on a vetted random oracle, not SpinHash.
+pub(crate) fn shake256_32(input: &[u8]) -> [u8; 32] {
+    let mut hasher = Shake256::default();
+    hasher.update(input);
+    let mut out = [0u8; 32];
+    let mut reader = hasher.finalize_xof();
+    reader
+        .read_exact(&mut out)
+        .expect("SHAKE256 XOF read must not fail");
+    out
+}
+
+/// FIPS 203 / Kyber 12-bit candidate: accept iff already in `[0, q)`.
+///
+/// Rejecting `d ≥ q` (instead of reducing a range that is not a multiple
+/// of `q`) is what makes public `a` uniform in `R_q`.
+#[inline]
+pub(crate) fn accept_uniform_zq_12(d: u16) -> Option<u16> {
+    if d < crate::params::FIELD_MODULUS {
+        Some(d)
+    } else {
+        None
+    }
+}
+
 /// Deterministically expand a 32-byte seed into a uniform polynomial
 /// over Z_q using SHAKE256.  Used for the public 'a' polynomial in the
 /// hardened KEM path.
+///
+/// Coefficients are sampled by 12-bit rejection (FIPS 203 SampleNTT):
+/// each 3-byte block yields two 12-bit candidates; a candidate is kept
+/// only when it is already in `[0, q)`. Nothing is reduced modulo `q`
+/// from a range that is not a multiple of `q`.
 pub fn expand_a_shake(seed: &[u8; 32], params: &Params) -> Poly {
     let n = params.ring_dim;
     let mut xof = ShakePrng::new(seed);
-    let raw = xof.next_bytes(n * 2);
     let mut coeffs = Vec::with_capacity(n);
-    for chunk in raw.chunks(2) {
-        coeffs.push(barrett_reduce_unsigned(
-            u16::from_le_bytes([chunk[0], chunk[1]]) as u64,
-        ));
+    while coeffs.len() < n {
+        let buf = xof.next_bytes(3);
+        let d1 = u16::from(buf[0]) | ((u16::from(buf[1]) & 0x0f) << 8);
+        let d2 = (u16::from(buf[1]) >> 4) | (u16::from(buf[2]) << 4);
+        if let Some(c) = accept_uniform_zq_12(d1) {
+            coeffs.push(c);
+            if coeffs.len() == n {
+                break;
+            }
+        }
+        if let Some(c) = accept_uniform_zq_12(d2) {
+            if coeffs.len() < n {
+                coeffs.push(c);
+            }
+        }
     }
     Poly { coeffs, n }
 }
@@ -126,4 +169,62 @@ pub fn derive_fo_materials(coin: &[u8], pk_hash: &[u8; 32], params: &Params) -> 
     let e2 = sample_cbd_shake(&e2_label, eta, n);
 
     (r, e1, e2)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::reduce::barrett_reduce_unsigned;
+    use crate::params::{Params, FIELD_MODULUS};
+
+    #[test]
+    fn twelve_bit_candidate_at_or_above_q_is_rejected() {
+        assert_eq!(accept_uniform_zq_12(0), Some(0));
+        assert_eq!(
+            accept_uniform_zq_12(FIELD_MODULUS - 1),
+            Some(FIELD_MODULUS - 1)
+        );
+        assert_eq!(accept_uniform_zq_12(FIELD_MODULUS), None);
+        assert_eq!(accept_uniform_zq_12(4095), None);
+    }
+
+    #[test]
+    fn expand_a_shake_coeffs_in_range() {
+        let params = Params::default();
+        let seed = [0x11u8; 32];
+        let a = expand_a_shake(&seed, &params);
+        assert_eq!(a.coeffs.len(), params.ring_dim);
+        assert!(a.coeffs.iter().all(|&c| c < FIELD_MODULUS));
+    }
+
+    #[test]
+    fn expand_a_shake_is_deterministic() {
+        let params = Params::default();
+        let seed = [0x5Au8; 32];
+        let a = expand_a_shake(&seed, &params);
+        let b = expand_a_shake(&seed, &params);
+        assert_eq!(a.coeffs, b.coeffs);
+    }
+
+    #[test]
+    fn expand_a_shake_does_not_barrett_reduce_raw_u16() {
+        // HEAD mapped each SHAKE u16 through Barrett (biased: 0..2284
+        // appear 20 times, 2285..3328 appear 19). Rejection sampling
+        // must not reproduce that map.
+        let params = Params::default();
+        let seed = [0xA5u8; 32];
+        let a = expand_a_shake(&seed, &params);
+
+        let mut xof = ShakePrng::new(&seed);
+        let raw = xof.next_bytes(params.ring_dim * 2);
+        let old: Vec<u16> = raw
+            .chunks(2)
+            .map(|c| barrett_reduce_unsigned(u16::from_le_bytes([c[0], c[1]]) as u64))
+            .collect();
+
+        assert_ne!(
+            a.coeffs, old,
+            "public a must not be the old u16-then-Barrett image of SHAKE"
+        );
+    }
 }

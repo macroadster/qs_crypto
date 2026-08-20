@@ -7,11 +7,12 @@ Formal verification model for the QS-Crypto PAKE + Double Ratchet composition.
 | Component | Abstraction |
 |-----------|-------------|
 | Spin KEM | Ideal IND-CCA2 KEM (encaps/decaps) |
-| SHAKE256 KDF | Random oracle (`shake_kdf`, `shake_session`) |
-| AEAD | Perfect authenticated encryption (`aead_enc`/`aead_dec`) |
-| Password KDF | Deterministic function of `(password, salt)` |
-| Symmetric ratchet | One-way chain: `chain_next`, `chain_msgkey` |
-| KEM ratchet | `ratchet_root(old_root, kem_ss)` |
+| SHAKE256 KDF | Random oracle (`shake_kdf`, `shake_session_hash`, `shake_derive`) |
+| AEAD | `AEAD(key, nonce, aad, plaintext)` matching `aead::encrypt` |
+| Password KDF | `SHAKE256("qs-pake-envelope" ‖ …)` — envelope encrypts only `sk` with `aad=pk` |
+| Session key | `SHAKE256(0x20 ‖ ss ‖ entire server_msg)` |
+| Symmetric ratchet | `SHAKE256(ck ‖ "qs-chain-msgkey" \| "qs-chain-next")` after `qs-ratchet-root` / `qs-ratchet-chain-a\|b` |
+| KEM ratchet | `SHAKE256(root ‖ kem_ss ‖ "qs-ratchet-kem")` |
 
 ## Security queries (model targets)
 
@@ -70,4 +71,7 @@ Verification results are **not recorded** because ProVerif could not be installe
 - Password entropy is assumed sufficient (modeled as `[private]`).
 - Out-of-order message delivery is not modeled (the ratchet does not
   support it in the current implementation).
-- The model uses a simplified 2-message PAKE flow matching the implementation.
+- The model is the 2-message Rust login (`PakeClient` / `PakeServer`) composed
+  with `Session::new` → `DoubleRatchet::init`. Envelope, session-key transcript,
+  and ratchet labels match `pake.rs` and `ratchet.rs`. Q4 is a correspondence
+  (no `new` binder inside the query).

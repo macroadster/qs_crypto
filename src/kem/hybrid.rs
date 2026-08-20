@@ -106,12 +106,9 @@ pub fn hybrid_encapsulate(pk: &HybridPublicKey) -> (HybridCiphertext, HybridShar
     let eph_public = XPublic::from(&eph_secret);
     let peer_x25519 = XPublic::from(pk.x25519);
     let ss_x25519 = eph_secret.diffie_hellman(&peer_x25519);
-    // Reject low-order / identity points that would yield an all-zero shared secret.
-    assert_ne!(
-        ss_x25519.as_bytes(),
-        &[0u8; 32],
-        "X25519 produced all-zero shared secret (low-order peer key)"
-    );
+    // A low-order / identity peer key yields an all-zero DH secret.
+    // That is a dummy contribution, not a panic: the combiner still
+    // binds the transcript and the Spin leg supplies the secret.
 
     let ct = HybridCiphertext {
         spin_ct: spin_result.ciphertext,
@@ -140,19 +137,23 @@ pub fn hybrid_decapsulate(
     sk: &HybridPrivateKey,
     ct: &HybridCiphertext,
 ) -> crate::Result<HybridSharedSecret> {
-    // Always run both legs — no short-circuit on Spin failure.
+    // Always run both legs — no short-circuit, no per-leg error variant.
     let spin_result = decapsulate(&sk.spin, &ct.spin_ct);
 
     // X25519 decapsulation (always runs)
     let eph_public = XPublic::from(ct.x25519_ephemeral);
     let ss_x25519 = sk.x25519.diffie_hellman(&eph_public);
 
-    // Propagate Spin error only after X25519 has completed
-    let ss_spin = spin_result?;
+    // Cryptographic failure of Spin is a dummy contribution, then the
+    // same combiner. Returning `spin_result?` here is a which-leg oracle.
+    let ss_spin = match spin_result {
+        Ok(ss) => *ss.as_bytes(),
+        Err(_) => dummy_leg_ss(b"qs-hybrid-spin-dummy", ct.spin_ct.as_bytes()),
+    };
 
     // Same combiner, binding all transcript material.
     let combined = hybrid_combine(
-        ss_spin.as_bytes(),
+        &ss_spin,
         ss_x25519.as_bytes(),
         sk.spin_public.as_bytes(),
         &sk.x25519_public.to_bytes(),
@@ -161,6 +162,18 @@ pub fn hybrid_decapsulate(
     );
 
     Ok(HybridSharedSecret::from_bytes(combined))
+}
+
+/// Deterministic dummy contribution for a failed hybrid leg.
+/// Public encoding of which leg failed must not leak via `Result`.
+fn dummy_leg_ss(label: &[u8], transcript: &[u8]) -> [u8; 32] {
+    let mut hasher = Shake256::default();
+    hasher.update(label);
+    hasher.update(transcript);
+    let mut out = [0u8; 32];
+    let mut reader = hasher.finalize_xof();
+    reader.read_exact(&mut out).expect("SHAKE read failed");
+    out
 }
 
 /// Hybrid combiner: SHAKE256 over both shared secrets + all public transcript
@@ -307,11 +320,7 @@ pub fn full_hybrid_encapsulate(
     let eph_public = XPublic::from(&eph_secret);
     let peer_x25519 = XPublic::from(pk.x25519);
     let ss_x25519 = eph_secret.diffie_hellman(&peer_x25519);
-    assert_ne!(
-        ss_x25519.as_bytes(),
-        &[0u8; 32],
-        "X25519 produced all-zero shared secret (low-order peer key)"
-    );
+    // Low-order peer key → dummy (possibly zero) DH contribution; do not panic.
 
     // 3. ML-KEM-768 encapsulation
     let (mlkem_ct, mlkem_ss) = pk
@@ -349,26 +358,33 @@ pub fn full_hybrid_decapsulate(
     sk: &FullHybridPrivateKey,
     ct: &FullHybridCiphertext,
 ) -> crate::Result<HybridSharedSecret> {
-    // Always run all three legs — no short-circuit.
+    // Always run all three legs — no short-circuit, no per-leg error.
     let spin_result = decapsulate(&sk.spin, &ct.spin_ct);
 
     // X25519
     let eph_public = XPublic::from(ct.x25519_ephemeral);
     let ss_x25519 = sk.x25519.diffie_hellman(&eph_public);
 
-    // ML-KEM-768: reconstruct typed ciphertext from bytes
-    let mlkem_ct = ml_kem::array::Array::try_from(ct.mlkem_ct.as_slice())
-        .map_err(|_| crate::Error::DecapsulationFailed)?;
-    let mlkem_result = sk.mlkem_dk.decapsulate(&mlkem_ct);
+    // ML-KEM-768: reconstruct typed ciphertext from bytes. Parse failure
+    // and decaps failure are dummy contributions, not distinct errors
+    // (those would be a which-leg oracle against Spin FO-reject).
+    let mlkem_ss_buf = match ml_kem::array::Array::try_from(ct.mlkem_ct.as_slice()) {
+        Ok(mlkem_ct) => match sk.mlkem_dk.decapsulate(&mlkem_ct) {
+            Ok(ss) => AsRef::<[u8]>::as_ref(&ss).to_vec(),
+            Err(_) => dummy_leg_ss(b"qs-hybrid-mlkem-dummy", &ct.mlkem_ct).to_vec(),
+        },
+        Err(_) => dummy_leg_ss(b"qs-hybrid-mlkem-dummy", &ct.mlkem_ct).to_vec(),
+    };
 
-    // Propagate errors only after all legs complete
-    let ss_spin = spin_result?;
-    let mlkem_ss = mlkem_result.map_err(|_| crate::Error::DecapsulationFailed)?;
+    let ss_spin = match spin_result {
+        Ok(ss) => *ss.as_bytes(),
+        Err(_) => dummy_leg_ss(b"qs-hybrid-spin-dummy", ct.spin_ct.as_bytes()),
+    };
 
     let combined = full_hybrid_combine(&FullHybridTranscript {
-        ss_spin: ss_spin.as_bytes(),
+        ss_spin: &ss_spin,
         ss_x25519: ss_x25519.as_bytes(),
-        ss_mlkem: mlkem_ss.as_ref(),
+        ss_mlkem: &mlkem_ss_buf,
         pk_spin: sk.spin_public.as_bytes(),
         pk_x25519: &sk.x25519_public.to_bytes(),
         ct_spin: ct.spin_ct.as_bytes(),

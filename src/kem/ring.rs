@@ -6,9 +6,11 @@
 
 use crate::core::reduce::{barrett_reduce_signed, barrett_reduce_unsigned};
 use crate::params::{Params, SecurityLevel, FIELD_MODULUS};
-use crate::primitives::hash::spin_hash;
 use crate::primitives::prng::SpinPrng;
 use core::hint::black_box;
+use sha3::digest::{ExtendableOutput, Update};
+use sha3::Shake256;
+use std::io::Read;
 
 /// A polynomial in Z_q\[X\]/(X^N + 1), stored as a vector of coefficients.
 #[derive(Clone, Debug)]
@@ -267,8 +269,18 @@ pub fn decode_message(poly: &Poly, msg_bytes: usize) -> Vec<u8> {
 }
 
 /// Hash a public key for the FO transform.
+///
+/// Must be a vetted RO: this value is bound into `derive_fo_materials`,
+/// so SpinHash here would put the unvetted sponge back on the CCA path.
 pub fn hash_pk(pk_bytes: &[u8]) -> [u8; 32] {
-    spin_hash(pk_bytes)
+    let mut hasher = Shake256::default();
+    hasher.update(pk_bytes);
+    let mut out = [0u8; 32];
+    let mut reader = hasher.finalize_xof();
+    reader
+        .read_exact(&mut out)
+        .expect("SHAKE256 XOF read must not fail");
+    out
 }
 
 /// Infer [`Params`] from a security-level byte stored at the start of
@@ -386,5 +398,16 @@ mod tests {
         assert!(!uses_ntt_mul(64));
         assert!(!uses_ntt_mul(192));
         assert!(!uses_ntt_mul(0));
+    }
+
+    #[test]
+    fn hash_pk_is_not_spin_hash() {
+        use crate::primitives::hash::spin_hash;
+        let pk_bytes: Vec<u8> = (0u8..80).collect();
+        assert_ne!(
+            hash_pk(&pk_bytes),
+            spin_hash(&pk_bytes),
+            "FO public-key hash must not be SpinHash"
+        );
     }
 }

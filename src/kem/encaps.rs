@@ -9,8 +9,7 @@ use zeroize::Zeroize;
 
 use super::ring::{encode_message, hash_pk, params_from_level_byte, poly_add, poly_mul, Poly};
 use super::types::{Ciphertext, EncapsulationResult, PublicKey, SharedSecret};
-use super::xof::{derive_fo_materials, expand_a_shake};
-use crate::primitives::hash::spin_hash;
+use super::xof::{derive_fo_materials, expand_a_shake, shake256_32};
 
 /// Deterministic inner encapsulation (used by both encaps and decaps FO check).
 ///
@@ -46,14 +45,13 @@ pub(crate) fn encaps_inner(pk: &PublicKey, coin: &[u8]) -> (Ciphertext, [u8; 32]
 
     let ct = Ciphertext::from_bytes(&ct_bytes).unwrap();
 
-    // Shared secret = SpinHash(0x11 ‖ m ‖ ct)  — still uses the library hash
-    // (acceptable: the SS is user-visible output; the reduction protects the
-    //  confidentiality of the message inside the KEM).
+    // Shared secret = SHAKE256(0x11 ‖ m ‖ ct). FO H must be a random oracle;
+    // SpinHash is an unvetted sponge and cannot sit on the CCA path.
     let mut ss_input = Vec::with_capacity(1 + coin.len() + ct_bytes.len());
     ss_input.push(0x11);
     ss_input.extend_from_slice(coin);
     ss_input.extend_from_slice(&ct_bytes);
-    let ss = spin_hash(&ss_input);
+    let ss = shake256_32(&ss_input);
 
     (ct, ss)
 }

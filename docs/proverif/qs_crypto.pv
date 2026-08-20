@@ -1,6 +1,14 @@
 (* ═══════════════════════════════════════════════════════════════════
    QS-Crypto Formal Model — ProVerif
-   Models: PAKE registration/login + Double Ratchet session
+
+   This file models the protocol that Rust actually runs:
+
+     src/protocols/pake.rs      — 2-message login, envelope, session key
+     src/protocols/ratchet.rs   — DoubleRatchet::init + kem_ratchet_step
+     src/protocols/session.rs   — Session::new composes PAKE ss → ratchet
+
+   Transcripts and labels are taken from those files, not from an
+   idealized 3-tuple (epk, env, salt) protocol.
    ═══════════════════════════════════════════════════════════════════ *)
 
 (* ── Channels ──────────────────────────────────────────────────────
@@ -28,25 +36,51 @@ fun kem_shared(pkey, nonce): key [private].
 reduc forall sk: skey, r: nonce;
   kem_decaps(sk, kem_encaps(pk(sk), r)) = kem_shared(pk(sk), r).
 
-(* AEAD: authenticated encryption *)
-fun aead_enc(key, bitstring): envelope.
-reduc forall k: key, m: bitstring;
-  aead_dec(k, aead_enc(k, m)) = m.
+(* AEAD(key, nonce, aad, plaintext) — matches aead::encrypt / decrypt.
+   PAKE envelope: AEAD(pwk, nonce, aad=pk, sk). Session messages reuse
+   the same constructor with a derived nonce. *)
+fun aead_enc(key, nonce, bitstring, bitstring): envelope.
+reduc forall k: key, n: nonce, aad: bitstring, pt: bitstring;
+  aead_dec(k, n, aad, aead_enc(k, n, aad, pt)) = pt.
 
-(* KDF / hash: modeled as random oracles *)
-fun shake_kdf(bitstring): key.
-fun shake_session(key, bitstring): key.
+(* Domain labels — byte-identical to the Rust strings / domain bytes. *)
+const qs_pake_envelope: bitstring.           (* b"qs-pake-envelope" *)
+const qs_session_domain_0x20: bitstring.     (* 0x20 *)
+const qs_ratchet_root: bitstring.            (* b"qs-ratchet-root" *)
+const qs_ratchet_chain_a: bitstring.         (* b"qs-ratchet-chain-a" *)
+const qs_ratchet_chain_b: bitstring.         (* b"qs-ratchet-chain-b" *)
+const qs_ratchet_kem: bitstring.             (* b"qs-ratchet-kem" *)
+const qs_chain_msgkey: bitstring.            (* b"qs-chain-msgkey" *)
+const qs_chain_next: bitstring.              (* b"qs-chain-next" *)
+const qs_session_nonce: bitstring.           (* b"qs-session-nonce" *)
+const empty_info: bitstring.
+const client_hello: bitstring.               (* PakeClient::start marker *)
+const dir_init: bitstring.
+const dir_resp: bitstring.
+const cnt0: bitstring.
+const cnt1: bitstring.
 
-(* Password-based key derivation *)
-fun pwk_derive(password, nonce): key.
+(* pwk = SHAKE256("qs-pake-envelope" ‖ le64(len(pw)) ‖ pw
+                 ‖ le64(len(salt)) ‖ salt ‖ info)
+   See pake.rs shake_kdf. *)
+fun shake_kdf(bitstring, password, nonce, bitstring): key.
 
-(* Symmetric ratchet: deterministic one-way chain *)
-fun chain_next(key): key.
-fun chain_msgkey(key): key.
+(* session_key = SHAKE256(0x20 ‖ ss ‖ server_msg)
+   server_msg is the entire server response (record ‖ kem_ct),
+   not (epk, ct). See pake.rs shake_session_hash. *)
+fun shake_session_hash(bitstring, key, bitstring): key.
 
-(* KEM ratchet: derive new root + chain from root_key ‖ kem_ss *)
-fun ratchet_root(key, key): key.
-fun ratchet_chain(key, key): key.
+(* SHAKE256(key ‖ label) — DoubleRatchet::init and symmetric_ratchet. *)
+fun shake_derive(key, bitstring): key.
+
+(* SHAKE256(root ‖ kem_ss ‖ "qs-ratchet-kem") → 64 bytes
+   = new_root[0:32] ‖ new_send_chain[32:64]. See kem_ratchet_step. *)
+fun shake_kem_ratchet(key, key, bitstring): bitstring.
+fun kem_ratchet_new_root(bitstring): key.
+fun kem_ratchet_new_chain(bitstring): key.
+
+(* SHAKE256("qs-session-nonce" ‖ direction ‖ msg_number) → 16-byte nonce. *)
+fun derive_nonce(bitstring, bitstring, bitstring): nonce.
 
 (* ── Events for security queries ──────────────────────────────────*)
 
@@ -72,120 +106,126 @@ free msg_after_ratchet: bitstring [private].
 
 (* ═══════════════════════════════════════════════════════════════════
    1. PAKE REGISTRATION  (secure channel)
+
+   Matches pake_register:
+     pwk = SHAKE256("qs-pake-envelope" ‖ …)
+     envelope = AEAD(pwk, nonce, aad=pk, sk)   — encrypts only sk
+     record  = (pk, env, salt, nonce)
    ═══════════════════════════════════════════════════════════════════ *)
 
 let Registration(pw: password) =
-  (* Client generates a KEM keypair *)
   new sk: skey;
   let epk = pk(sk) in
   event ClientRegistered(epk);
 
-  (* Derive password key, encrypt private key into envelope *)
   new salt: nonce;
-  let pwkey = pwk_derive(pw, salt) in
-  let env = aead_enc(pwkey, (sk, epk)) in
+  new env_nonce: nonce;
+  let pwk = shake_kdf(qs_pake_envelope, pw, salt, empty_info) in
+  let env = aead_enc(pwk, env_nonce, epk, sk) in
 
-  (* Send registration record to server over secure channel *)
-  out(secch, (epk, env, salt)).
+  out(secch, (epk, env, salt, env_nonce)).
 
 let ServerStore() =
-  in(secch, (epk: pkey, env: envelope, salt: nonce));
+  in(secch, (epk: pkey, env: envelope, salt: nonce, env_nonce: nonce));
   event ServerStored(epk);
-  (* Server stores (epk, env, salt) — proceeds to login phase *)
-  out(pubch, (epk, env, salt)).    (* make record available *)
+  out(pubch, (epk, env, salt, env_nonce)).
 
 (* ═══════════════════════════════════════════════════════════════════
-   2. PAKE LOGIN  (public channel)
+   2. PAKE LOGIN then SESSION  (public channel)
+
+   2-message login matching PakeClient / PakeServer, then Session::new
+   which calls DoubleRatchet::init with qs-ratchet-root / chain-a|b.
    ═══════════════════════════════════════════════════════════════════ *)
 
-let ClientLogin(pw: password) =
-  (* Receive server's response containing the registration record *)
-  in(pubch, (epk: pkey, env: envelope, salt: nonce, ct: ciphertext));
+let ClientLoginThenSession(pw: password) =
+  (* msg1: identity marker *)
+  out(pubch, client_hello);
+
+  (* msg2 = entire server response: record ‖ kem_ct *)
+  in(pubch, (epk: pkey, env: envelope, salt: nonce, env_nonce: nonce, ct: ciphertext));
+  let server_msg = (epk, env, salt, env_nonce, ct) in
 
   event ClientStartsLogin(epk);
 
-  (* Recover private key from envelope *)
-  let pwkey = pwk_derive(pw, salt) in
-  let (sk: skey, epk2: pkey) = aead_dec(pwkey, env) in
-
-  (* Decapsulate KEM ciphertext *)
+  let pwk = shake_kdf(qs_pake_envelope, pw, salt, empty_info) in
+  let sk: skey = aead_dec(pwk, env_nonce, epk, env) in
   let ss = kem_decaps(sk, ct) in
 
-  (* Derive session key bound to transcript *)
-  let session_key = shake_session(ss, (epk, ct)) in
+  (* Bind the entire server_msg, not (epk, ct). *)
+  let session_key = shake_session_hash(qs_session_domain_0x20, ss, server_msg) in
   event ClientDerivesSession(epk, session_key);
 
-  (* Use session key to protect a secret message — tests secrecy *)
-  let msg_key = chain_msgkey(session_key) in
-  out(pubch, aead_enc(msg_key, secret_test)).
+  (* Session::new → DoubleRatchet::init *)
+  let root = shake_derive(session_key, qs_ratchet_root) in
+  let chain_a = shake_derive(session_key, qs_ratchet_chain_a) in
+  let chain_b = shake_derive(session_key, qs_ratchet_chain_b) in
 
-let ServerLogin() =
-  (* Read stored record *)
-  in(pubch, (epk: pkey, env: envelope, salt: nonce));
-
-  (* Encapsulate a shared secret to the registered public key *)
-  new r: nonce;
-  let ct = kem_encaps(epk, r) in
-  let ss = kem_shared(epk, r) in
-  event ServerSendsResponse(epk, ct);
-
-  (* Send record + ciphertext to client *)
-  out(pubch, (epk, env, salt, ct));
-
-  (* Derive session key bound to transcript *)
-  let session_key = shake_session(ss, (epk, ct)) in
-  event ServerDerivesSession(epk, session_key).
-
-(* ═══════════════════════════════════════════════════════════════════
-   3. DOUBLE RATCHET  (symmetric + KEM ratchet)
-   ═══════════════════════════════════════════════════════════════════ *)
-
-let RatchetSender(session_key: key) =
-  (* --- Message 1: derive key from initial chain --- *)
-  let ck0 = session_key in
-  let mk0 = chain_msgkey(ck0) in
-  let ck1 = chain_next(ck0) in
+  (* Client treated as initiator: send_ck = chain_a *)
+  let mk0 = shake_derive(chain_a, qs_chain_msgkey) in
+  let ck1 = shake_derive(chain_a, qs_chain_next) in
+  let n0 = derive_nonce(qs_session_nonce, dir_init, cnt0) in
   event SendMsg(mk0, msg1_test);
-  out(pubch, aead_enc(mk0, msg1_test));
+  out(pubch, aead_enc(mk0, n0, empty_info, msg1_test));
 
-  (* --- Message 2: next chain step --- *)
-  let mk1 = chain_msgkey(ck1) in
-  let ck2 = chain_next(ck1) in
+  let mk1 = shake_derive(ck1, qs_chain_msgkey) in
+  let ck2 = shake_derive(ck1, qs_chain_next) in
+  let n1 = derive_nonce(qs_session_nonce, dir_init, cnt1) in
   event SendMsg(mk1, msg2_test);
-  out(pubch, aead_enc(mk1, msg2_test));
+  out(pubch, aead_enc(mk1, n1, empty_info, msg2_test));
 
-  (* --- KEM ratchet step --- *)
+  (* kem_ratchet_step: SHAKE256(root ‖ kem_ss ‖ "qs-ratchet-kem") *)
   new rk_nonce: nonce;
   new peer_sk: skey;
   let peer_epk = pk(peer_sk) in
   let ratchet_ct = kem_encaps(peer_epk, rk_nonce) in
   let ratchet_ss = kem_shared(peer_epk, rk_nonce) in
-  let new_root = ratchet_root(ck2, ratchet_ss) in
-  let new_chain = ratchet_chain(ck2, ratchet_ss) in
+  let expanded = shake_kem_ratchet(root, ratchet_ss, qs_ratchet_kem) in
+  let new_root = kem_ratchet_new_root(expanded) in
+  let new_chain = kem_ratchet_new_chain(expanded) in
   event RatchetStepClient(new_root);
 
-  (* --- Message 3: after ratchet, using new chain key --- *)
-  let mk2 = chain_msgkey(new_chain) in
+  let mk2 = shake_derive(new_chain, qs_chain_msgkey) in
+  let n2 = derive_nonce(qs_session_nonce, dir_init, cnt1) in
   event SendMsg(mk2, msg_after_ratchet);
-  out(pubch, aead_enc(mk2, msg_after_ratchet)).
+  out(pubch, aead_enc(mk2, n2, empty_info, msg_after_ratchet)).
 
-let RatchetReceiver(session_key: key) =
-  (* Receive message 1 *)
-  let ck0 = session_key in
-  let mk0 = chain_msgkey(ck0) in
+let ServerLoginThenSession() =
+  in(pubch, (epk: pkey, env: envelope, salt: nonce, env_nonce: nonce));
+  in(pubch, hello: bitstring);
+
+  new r: nonce;
+  let ct = kem_encaps(epk, r) in
+  let ss = kem_shared(epk, r) in
+  event ServerSendsResponse(epk, ct);
+
+  (* Entire server_msg = record ‖ kem_ct *)
+  let server_msg = (epk, env, salt, env_nonce, ct) in
+  out(pubch, server_msg);
+
+  let session_key = shake_session_hash(qs_session_domain_0x20, ss, server_msg) in
+  event ServerDerivesSession(epk, session_key);
+
+  (* Session::new → DoubleRatchet::init (same labels as the client) *)
+  let root = shake_derive(session_key, qs_ratchet_root) in
+  let chain_a = shake_derive(session_key, qs_ratchet_chain_a) in
+  let chain_b = shake_derive(session_key, qs_ratchet_chain_b) in
+
+  (* Server treated as responder: recv_ck = chain_a *)
+  let mk0 = shake_derive(chain_a, qs_chain_msgkey) in
+  let n0 = derive_nonce(qs_session_nonce, dir_init, cnt0) in
   in(pubch, enc_msg1: envelope);
-  let m1 = aead_dec(mk0, enc_msg1) in
+  let m1 = aead_dec(mk0, n0, empty_info, enc_msg1) in
   event RecvMsg(mk0, m1);
 
-  (* Receive message 2 *)
-  let ck1 = chain_next(ck0) in
-  let mk1 = chain_msgkey(ck1) in
+  let ck1 = shake_derive(chain_a, qs_chain_next) in
+  let mk1 = shake_derive(ck1, qs_chain_msgkey) in
+  let n1 = derive_nonce(qs_session_nonce, dir_init, cnt1) in
   in(pubch, enc_msg2: envelope);
-  let m2 = aead_dec(mk1, enc_msg2) in
+  let m2 = aead_dec(mk1, n1, empty_info, enc_msg2) in
   event RecvMsg(mk1, m2).
 
 (* ═══════════════════════════════════════════════════════════════════
-   4. SECURITY QUERIES
+   3. SECURITY QUERIES
    ═══════════════════════════════════════════════════════════════════ *)
 
 (* Q1: Session key secrecy — the attacker cannot learn secret_test *)
@@ -200,10 +240,11 @@ query attacker(msg2_test).
 query attacker(msg_after_ratchet).
 
 (* Q4: Mutual authentication — if the client derives a session key,
-   the server must have responded with a matching ciphertext *)
-query epk: pkey, sk: key;
+   the server sent a ciphertext for the same public key.
+   Correspondence only: no `new` binder inside the query. *)
+query epk: pkey, sk: key, ct: ciphertext;
   event(ClientDerivesSession(epk, sk))
-  ==> event(ServerSendsResponse(epk, kem_encaps(epk, new nonce))).
+  ==> event(ServerSendsResponse(epk, ct)).
 
 (* Q5: Agreement — if both derive session keys for the same pk,
    the keys must match *)
@@ -212,14 +253,15 @@ query epk: pkey, sk1: key, sk2: key;
   ==> sk1 = sk2.
 
 (* ═══════════════════════════════════════════════════════════════════
-   5. MAIN PROCESS
+   4. MAIN PROCESS
+
+   Registration (one-shot) then unbounded login sessions, each of
+   which composes PAKE → DoubleRatchet the way Session::new does.
    ═══════════════════════════════════════════════════════════════════ *)
 
 free pw_alice: password [private].
 
 process
-  (* Registration phase *)
   ( Registration(pw_alice) | ServerStore() )
   |
-  (* Login phase — unbounded sessions *)
-  ( !ClientLogin(pw_alice) | !ServerLogin() )
+  ( !ClientLoginThenSession(pw_alice) | !ServerLoginThenSession() )

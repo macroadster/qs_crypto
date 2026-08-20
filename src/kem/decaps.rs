@@ -10,7 +10,7 @@ use subtle::ConstantTimeEq;
 use super::encaps::encaps_inner;
 use super::ring::{decode_message, params_from_level_byte, poly_mul, poly_sub, Poly};
 use super::types::{Ciphertext, PrivateKey, PublicKey, SharedSecret};
-use crate::primitives::hash::spin_hash;
+use super::xof::shake256_32;
 
 /// Decapsulate a shared secret from `ct` using `sk`.
 ///
@@ -59,12 +59,13 @@ pub fn decapsulate(sk: &PrivateKey, ct: &Ciphertext) -> crate::Result<SharedSecr
     // Derive mask without branching: 0xFF if match, 0x00 if not
     let mask = ct_match.unwrap_u8().wrapping_neg();
 
-    // Implicit-rejection secret: SpinHash(0x12 ‖ sk ‖ ct)
+    // Implicit-rejection secret: SHAKE256(0x12 ‖ sk ‖ ct). Same RO as
+    // accept-path H, so FO does not depend on SpinHash.
     let mut rej_input = Vec::with_capacity(1 + sk_bytes.len() + ct_bytes.len());
     rej_input.push(0x12);
     rej_input.extend_from_slice(sk_bytes);
     rej_input.extend_from_slice(ct_bytes);
-    let ss_reject = spin_hash(&rej_input);
+    let ss_reject = shake256_32(&rej_input);
 
     // Select valid or rejection secret in constant time
     let mut ss = [0u8; 32];
