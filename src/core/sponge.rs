@@ -118,9 +118,13 @@ impl SpinSponge {
     /// streaming such as statistical test suites).
     pub fn squeeze_into(&mut self, output: &mut [u8]) {
         const MINI_BLOCK: usize = 48; // More frequent mixing for better autocorrelation on long streams
-        // Max sponge rate across parameter sets is 64 (QS-192/256); stack buffer.
+                                      // Max sponge rate across parameter sets is 64 (QS-192/256); stack buffer.
         let mut rate_spins = [0u16; 64];
-        assert!(self.rate <= rate_spins.len(), "sponge rate {} exceeds stack buffer size 64", self.rate);
+        assert!(
+            self.rate <= rate_spins.len(),
+            "sponge rate {} exceeds stack buffer size 64",
+            self.rate
+        );
 
         let mut pos = 0usize;
         let mut bytes_since_permute = 0usize;
@@ -243,7 +247,7 @@ impl SpinSponge {
                     .wrapping_add(key1 | 1);
             }
 
-            let remaining_words = (num_bytes - pos + 7) / 8;
+            let remaining_words = (num_bytes - pos).div_ceil(8);
             let words_this_round = remaining_words.min(REKEY_WORDS);
 
             for _ in 0..words_this_round {

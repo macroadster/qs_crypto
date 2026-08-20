@@ -166,9 +166,23 @@ mod tests {
 
     #[test]
     fn u32_path_matches_mod() {
-        for a in [0u64, 1, 3328, 3329, 3330, 10_000, 3328 * 3328, 66_453_504, u32::MAX as u64] {
+        for a in [
+            0u64,
+            1,
+            3328,
+            3329,
+            3330,
+            10_000,
+            3328 * 3328,
+            66_453_504,
+            u32::MAX as u64,
+        ] {
             let expected = (a % Q as u64) as u16;
-            assert_eq!(barrett_reduce_u32(a), expected, "u32 path mismatch for a={a}");
+            assert_eq!(
+                barrett_reduce_u32(a),
+                expected,
+                "u32 path mismatch for a={a}"
+            );
             assert_eq!(barrett_reduce_u32(a), barrett_reduce_unsigned(a));
         }
     }
@@ -187,7 +201,11 @@ mod tests {
             let expected = (a % Q as u64) as u16;
             let got = barrett_reduce_u32(a);
             assert_eq!(got, expected, "u32 boundary mismatch for a={a}");
-            assert_eq!(got, barrett_reduce_unsigned(a), "u32 vs unsigned mismatch for a={a}");
+            assert_eq!(
+                got,
+                barrett_reduce_unsigned(a),
+                "u32 vs unsigned mismatch for a={a}"
+            );
         }
     }
 }
